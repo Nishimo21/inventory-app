@@ -131,7 +131,7 @@ textarea{border:1px solid var(--line);border-radius:12px;padding:14px;font-size:
 ・<b>同期コードは必ず控えておく</b>（紙やメモアプリに）。PCが壊れてもコードがあればデータ復元できます<br>
 ・同期コードを知っている人は誰でもデータにアクセスできます。<b>他人に教えないでください</b><br>
 ・2台のPCで<b>同時に編集しない</b>こと（後から保存した方が優先され、片方の変更が消えます）<br>
-・CSVの再アップロードは同じ販路のデータを<b>置き換え</b>ます（メルカリShops在庫のみ複数CSV追加マージ）<br>
+・CSVの再アップロードは同じ販路のデータを<b>置き換え</b>ます（メルカリShops在庫は追加マージ。全て入れ替えたい場合は削除→再アップロード）<br>
 ・「🗑 全CSV一括削除」をしても、月次分析の保存データ・仕入管理表の同期データは消えません<br>
 ・ブラウザのキャッシュ/履歴を削除するとローカルデータは消えますが、同期コードでクラウドから復元されます（コード紛失時は復元不可）<br>
 ・スプレッドシート更新後は「全シート同期」を忘れずに
@@ -214,7 +214,8 @@ function fbDeleteDetail(key){
 
 // ═══════════════════════════ STATE ═══════════════════════════
 const LS = key => { try { const v=JSON.parse(localStorage.getItem('dist_'+key)); if(v)return v; } catch {} if(key.startsWith('inv_md_')&&window._mdCache&&window._mdCache[key])return window._mdCache[key]; return null; };
-const SS = (key, val) => { try { localStorage.setItem('dist_'+key, JSON.stringify(val)); } catch {} };
+window._ssFailures=window._ssFailures||[];
+const SS = (key, val) => { try { localStorage.setItem('dist_'+key, JSON.stringify(val)); } catch (e) { window._ssFailures.push(key); console.error('localStorage保存失敗:', key, e && e.name); } };
 
 let state = {
   products: LS('inv_products') || [],
@@ -245,6 +246,12 @@ let state = {
   _detectedColors: LS('inv_detected_colors') || {},
   _noSkuWarnings: LS('inv_nosku_warn') || [],
   openingInv: LS('inv_opening_inv') || null,
+  expenses: LS('inv_expenses') || {fixed:[],monthly:{}},
+  creditCards: LS('inv_credit_cards') || [],
+  loans: LS('inv_loans') || [],
+  expenseAccounts: LS('inv_exp_accounts') || {fixed:['地代家賃','通信費','ツール・サブスク代','水道光熱費','保険料','給料・外注費（固定）','役員報酬','減価償却費','車両費'],variable:['荷造運賃','旅費交通費','消耗品費','給料・外注費（変動）','通信費','広告宣伝費','支払手数料'],other:['接待交際費','新聞図書費','研修費','修繕費','租税公課','雑費']},
+  reimbursements: LS('inv_reimb') || [],
+  reimbursedSkus: LS('inv_reimb_skus') || {},
   yafuoku_ship_deduct: (LS('inv_yafuoku_ship_deduct')!==null&&LS('inv_yafuoku_ship_deduct')!==undefined)?LS('inv_yafuoku_ship_deduct'):0,
   _lastModified: LS('inv_last_modified') || 0,
   selectedYear: LS('inv_sel_year') || new Date().getFullYear(),
@@ -297,15 +304,33 @@ function save() {
   SS('inv_color_config', state.colorConfig);
   SS('inv_detected_colors', state._detectedColors);
   SS('inv_nosku_warn', state._noSkuWarnings||[]);
+  window._ssFailures=[];
   state._lastModified=Date.now();
   SS('inv_opening_inv', state.openingInv);
   SS('inv_yafuoku_ship_deduct', state.yafuoku_ship_deduct);
+  SS('inv_reimb', state.reimbursements);
+  SS('inv_expenses', state.expenses);
+  SS('inv_credit_cards', state.creditCards);
+  SS('inv_loans', state.loans);
+  SS('inv_exp_accounts', state.expenseAccounts);
+  if(window._ssFailures.length>0){
+    try{showBanner('⚠ ブラウザの保存容量が不足し、一部データを端末に保存できませんでした（'+window._ssFailures.length+'件）。クラウド保存は継続しています。不要なブラウザデータの削除をご検討ください','err');}catch(e){}
+  }
+  SS('inv_reimb_skus', state.reimbursedSkus);
   SS('inv_last_modified', state._lastModified);
   SS('inv_sel_year', state.selectedYear); SS('inv_sel_month', state.selectedMonth);
   SS('inv_removed_pending', state.removedPending);
   SS('inv_monthly', state.monthlyData); SS('inv_purchase_log', state.purchaseLog);
   // Firebase sync
-  fbSave({
+  (function(){
+    // データ消失ガード: ローカルの主要データが空で、クラウドに実データがある場合は上書きしない
+    const coreCount=(state.products||[]).length+(state.sales_priceter||[]).length+(state.sales_yahoo||[]).length+(state.sales_yafuoku||[]).length+(state.mercari||[]).length+(state.amazon_fba||[]).length+(state.purchaseLog||[]).length;
+    if(coreCount===0&&LS('inv_cloud_had_data')){
+      console.warn('クラウド上書きを中止: ローカルが空でクラウドに既存データがあるため');
+      try{showBanner('⚠ データが空のため、クラウドへの上書きを中止しました（既存データ保護）','err');}catch(e){}
+      return;
+    }
+    fbSave({
     products:state.products,unlisted:state.unlisted,removed:state.removed,
     amazon_fba:state.amazon_fba,amazon_self:state.amazon_self,
     mercari:state.mercari,mercariFiles:state.mercariFiles,
@@ -315,10 +340,10 @@ function save() {
     sales_priceter:state.sales_priceter,sales_mercari:state.sales_mercari,
     sales_yahoo:state.sales_yahoo,mercari_orders:state.mercari_orders,
     yahoo_fees:state.yahoo_fees,auction_fees:state.auction_fees,
-    pendingShip:state.pendingShip,_manualPending:state._manualPending,monthlyData:state.monthlyData,sales_yafuoku:state.sales_yafuoku,sales_mercari_direct:state.sales_mercari_direct,sales_rakuma:state.sales_rakuma,colorConfig:state.colorConfig,openingInv:state.openingInv,yafuoku_ship_deduct:state.yafuoku_ship_deduct,_lastModified:state._lastModified,
+    pendingShip:state.pendingShip,_manualPending:state._manualPending,monthlyData:state.monthlyData,sales_yafuoku:state.sales_yafuoku,sales_mercari_direct:state.sales_mercari_direct,sales_rakuma:state.sales_rakuma,colorConfig:state.colorConfig,openingInv:state.openingInv,yafuoku_ship_deduct:state.yafuoku_ship_deduct,reimbursements:state.reimbursements,reimbursedSkus:state.reimbursedSkus,expenses:state.expenses,creditCards:state.creditCards,loans:state.loans,expenseAccounts:state.expenseAccounts,_lastModified:state._lastModified,
     purchaseLog:state.purchaseLog,selectedYear:state.selectedYear,selectedMonth:state.selectedMonth,
     removedPending:state.removedPending
-  });
+  });})();
 }
 
 // ═══════════════════════════ HELPERS ═══════════════════════════
@@ -614,6 +639,7 @@ const tabs = [
   {id:'analysis',label:'月次分析'},
   {id:'sheet',label:'管理表連携'},
   {id:'csv',label:'CSV取込'},
+  {id:'expenses',label:'経費管理'},
 ];
 
 function renderTabs() {
@@ -635,7 +661,31 @@ function renderMeta() {
   ].filter(Boolean).map(s=>`<span>${s}</span>`).join('');
 }
 
-function showPage(id) { state.page=id; renderAll(); }
+// 勘定科目プリセット更新の移行（完了フラグはstate.expenses内→クラウド同期され全端末で1回だけ実行）
+function migrateExpAccounts(){
+  try{
+    if(!state.expenses)state.expenses={fixed:[],monthly:{}};
+    if(state.expenses._accV2)return;
+    const ea=state.expenseAccounts||{};
+    const renameAll=(from,to)=>{
+      ['fixed','variable','other'].forEach(k=>{const a=ea[k]||[];const i=a.indexOf(from);if(i!==-1){if(a.includes(to))a.splice(i,1);else a[i]=to;}});
+      const fix=e=>{if(e&&e.account===from)e.account=to;};
+      ((state.expenses&&state.expenses.fixed)||[]).forEach(fix);
+      Object.values((state.expenses&&state.expenses.monthly)||{}).forEach(m=>{[...(m.variable||[]),...(m.other||[])].forEach(fix);});
+    };
+    renameAll('外注費（変動）','給料・外注費（変動）');
+    renameAll('消耗品費（付属品類、清掃用品等）','消耗品費');
+    if(ea.fixed&&!ea.fixed.includes('役員報酬')){const gi=ea.fixed.indexOf('給料・外注費（固定）');ea.fixed.splice(gi===-1?ea.fixed.length:gi+1,0,'役員報酬');}
+    if(ea.variable&&!ea.variable.includes('通信費'))ea.variable.push('通信費');
+    state.expenses._accV2=1;
+    // 起動時にクラウドへは送信しない（空環境で開いた際にデータを消す事故防止）
+    // ローカルにのみ保存し、次回のユーザー操作時のsave()でクラウドに反映される
+    SS('inv_expenses',state.expenses);
+    SS('inv_exp_accounts',state.expenseAccounts);
+  }catch(e){}
+}
+migrateExpAccounts();
+function showPage(id) { state.page=id; state._pgY=undefined; state._pgM=undefined; state._plY=undefined; state._plM=undefined; state._plD=undefined; state._plRange=undefined; state._plEY=undefined; state._plEM=undefined; renderAll(); }
 window.showPage=showPage;
 
 // Navigate to inventory with pre-set filter
@@ -647,6 +697,15 @@ function goInv(filter){
 window.goInv=goInv;
 
 function renderAll() {
+  // 出品後在庫の色設定の整合性: シートで検出されていない色（白以外）は
+  // 選択UIに出ない残留設定のため自動除去（表示と実動作を使用者の選択と一致させる）
+  {
+    const _det=state._detectedColors||{};
+    const _nm=(state.colorConfig&&state.colorConfig.normal)||{};
+    if(Object.keys(_det).length>0){
+      Object.keys(_nm).forEach(k=>{if(k!=='white'&&!_det[k])delete _nm[k];});
+    }
+  }
   renderMeta(); renderTabs();
   const pages=document.getElementById('pages');
   const {items,finalInv,nonAmz,allPS,colorWarnings}=buildInventory();
@@ -654,6 +713,8 @@ function renderAll() {
   let html='';
   // ── Dashboard
   html+=`<div class="page ${state.page==='dash'?'active':''}">`;
+  // ── グローバル基準月セレクター
+  html+=`<div class="card" style="padding:12px 18px;margin-bottom:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="font-size:13px;font-weight:700">📅 基準月:</span><select onchange="state.selectedYear=parseInt(this.value);save();renderAll()" style="width:85px">${(()=>{let o='';for(let y=2024;y<=2030;y++)o+=`<option value="${y}" ${y===state.selectedYear?'selected':''}>${y}</option>`;return o;})()}</select>年<select onchange="state.selectedMonth=parseInt(this.value);save();renderAll()" style="width:65px">${(()=>{let o='';for(let m2=1;m2<=12;m2++)o+=`<option value="${m2}" ${m2===state.selectedMonth?'selected':''}>${m2}</option>`;return o;})()}</select>月<span style="font-size:11px;color:var(--muted)">ここで選択した月が全ページ・月次保存の対象になります</span></div>`;
 
   // ── Sales Summary (top of dashboard, entire card clickable)
   const dsCostMap={};state.products.forEach(p=>{if(p.sku)dsCostMap[p.sku]=p.cost||0;});
@@ -662,9 +723,11 @@ function renderAll() {
   state.sales_priceter.forEach(r=>{const p=parseInt((r['出品価格']||'0').replace(/[,]/g,''),10)||0;const q=parseInt(r['売れた個数']||'1',10)||1;const c=parseInt((r['仕入れ価格']||'0').replace(/[,]/g,''),10)||0;const f=Math.abs(parseFloat((r['Amazon手数料']||'0').replace(/[,]/g,'')))||0;const ref=parseFloat((r['返金総額']||'0').replace(/[,]/g,''))||0;const shp=parseInt(r['_ship'],10)||0;const rp0=parseFloat((r['粗利益']||'0').replace(/[,]/g,''))||0;const rp=(r['_profitOverride']!==undefined)?r['_profitOverride']:rp0-(ref<0?0:shp);const hr=ref<0;if(!hr){dsSales+=p*q;dsCost+=c*q;dsQty+=q;dsProfit+=rp;dsFee+=shp;}if(hr){dsRefund+=Math.abs(ref);}dsFee+=f;});
   state.sales_mercari.forEach(r=>{const s=parseInt((r['売上（税込）']||'0').replace(/[,]/g,''),10)||0;const shp2=parseInt(r['_ship'],10)||0;const f=parseInt((r['販売手数料（税込）']||'0').replace(/[,]/g,''),10)||0;const q=parseInt(r['数量']||'1',10)||1;const oid=(r['注文番号']||'').trim();const sku=dsMerOSKU[oid]||'';const bc=sku?dsCostMap[sku]||0:0;const c=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const hr=!!r._isRefund;if(!hr){dsFee+=shp2;dsProfit-=shp2;dsSales+=s;dsCost+=c*q;dsQty+=q;dsProfit+=s-f-c*q;}else{dsProfit-=f;}dsFee+=f;});
   const yfC=state.yahoo_fees.commission/100+state.yahoo_fees.pr_ad/100;const afC=state.auction_fees.commission/100+state.auction_fees.pr_ad/100;
-  state.sales_yahoo.forEach(r=>{const q=parseInt(r['Quantity']||'0',10)||0;if(!q)return;const shp3=parseInt(r['_ship'],10)||0;const p=parseInt((r['UnitPrice']||'0').replace(/[,]/g,''),10)||0;const gp=(r['GetPointFixDate']||'').trim();const iid=(r['ItemId']||'').trim();const bc=dsCostMap[iid]||0;const c=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const s=p*q;const f=Math.round(s*(gp?yfC:afC));const hr=!!r._isRefund;if(!hr){dsFee+=shp3;dsProfit-=shp3;dsSales+=s;dsCost+=c*q;dsQty+=q;dsProfit+=s-c*q-f;}else{dsProfit-=f;}dsFee+=f;});
-  state.sales_yafuoku.forEach(r=>{const st=(r['状態']||'').trim();if(st==='キャンセル')return;const _n0=v=>{if(!v||String(v).trim()==='-')return 0;return parseInt(String(v).replace(/[,¥]/g,''),10)||0;};const afRaw=(r['Yahoo!オークション 落札システム利用料']||'').toString().trim();const isAuc3=afRaw!==''&&afRaw!=='-';const _ydd=(isAuc3&&!String(r['決済ID']||'').startsWith('manual_'))?(parseInt(state.yafuoku_ship_deduct,10)||0):0;const s=(r['_salesOverride']!==undefined)?r['_salesOverride']:Math.max(0,_n0(r['落札者/購入者の支払金額'])-_ydd);const af=_n0(r['Yahoo!オークション 落札システム利用料']);const ff=_n0(r['Yahoo!フリマ 販売手数料']);const sh=_n0(r['送料']);const f=(isAuc3?af:ff)+sh;const sku=(r['SKU']||'').trim();const bc=dsCostMap[sku]||0;const c=(r['_costOverride']!==undefined)?r['_costOverride']:bc;dsSales+=s;dsFee+=f;dsCost+=c;dsQty+=1;dsProfit+=s-f-c;});
+  const _dsHpAct=calcAucHpActive(state.sales_yahoo);state.sales_yahoo.forEach(r=>{const q=parseInt(r['Quantity']||'0',10)||0;if(!q)return;const shp3=parseInt(r['_ship'],10)||0;const p=parseInt((r['UnitPrice']||'0').replace(/[,]/g,''),10)||0;const gp=(r['GetPointFixDate']||'').trim();const iid=(r['ItemId']||'').trim();const bc=dsCostMap[iid]||0;const c=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const s=p*q;const f=gp?Math.round(s*yfC):calcAucStoreFee(s,_dsHpAct);const hr=!!r._isRefund;if(!hr){dsFee+=shp3;dsProfit-=shp3;dsSales+=s;dsCost+=c*q;dsQty+=q;dsProfit+=s-c*q-f;}else{dsProfit-=f;}dsFee+=f;});
+  state.sales_yafuoku.forEach(r=>{const st=(r['状態']||'').trim();if(st==='キャンセル')return;const _n0=v=>{if(!v||String(v).trim()==='-')return 0;return parseInt(String(v).replace(/[,¥]/g,''),10)||0;};const afRaw=(r['Yahoo!オークション 落札システム利用料']||'').toString().trim();const isAuc3=afRaw!==''&&afRaw!=='-';const _ydd=(isAuc3&&!String(r['決済ID']||'').startsWith('manual_'))?(parseInt(state.yafuoku_ship_deduct,10)||0):0;const s=(r['_salesOverride']!==undefined)?r['_salesOverride']:Math.max(0,_n0(r['落札者/購入者の支払金額'])-_ydd);const af=_n0(r['Yahoo!オークション 落札システム利用料']);const ff=_n0(r['Yahoo!フリマ 販売手数料']);const _rv=_n0(r['受取金額']);const _rp2=_n0(r['落札者/購入者の支払金額']);const sh=(r['_shipOverride']!==undefined)?r['_shipOverride']:(_rv>0?Math.max(0,_rp2-(isAuc3?af:ff)-_rv):_n0(r['送料']));const f=(isAuc3?af:ff)+sh;const sku=(r['SKU']||'').trim();const bc=dsCostMap[sku]||0;const c=(r['_costOverride']!==undefined)?r['_costOverride']:bc;dsSales+=s;dsFee+=f;dsCost+=c;dsQty+=1;dsProfit+=s-f-c;});
   [state.sales_mercari_direct,state.sales_rakuma].forEach(arr=>{arr.forEach(r=>{const hr=!!r._isRefund;const s=parseInt(r['売上']||'0',10)||0;const q=parseInt(r['数量']||'1',10)||1;const f=parseInt(r['手数料']||'0',10)||0;const sh4=parseInt(r['送料']||'0',10)||0;const co=parseInt(r['仕入']||'0',10)||0;const pv=(r['_profitOverride']!==undefined)?r['_profitOverride']:s-f-sh4-co*q;if(!hr){dsSales+=s;dsCost+=co*q;dsQty+=q;dsProfit+=pv;dsFee+=sh4;}else{dsProfit-=f;}dsFee+=f;});});
+  {const _rmDash=_reimbMonth(state.selectedYear,state.selectedMonth);dsSales+=_rmDash.amt;dsCost+=_rmDash.cost;dsProfit+=_rmDash.profit;}
+  {const _cb=(state.sales_yahoo.some(r=>!(r['GetPointFixDate']||'').trim()))?(parseInt(state.auction_fees.couponBurden,10)||0):0;if(_cb>0){dsFee+=_cb;dsProfit-=_cb;}}
   const dsNet=dsSales; // returns already subtracted
   if(dsSales>0||dsQty>0){
     html+=`<div class="card section" style="cursor:pointer" onclick="state._salesDetail='all';state._salesSort='date_desc';showPage('sales')"><h2>売上サマリー</h2><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px">`;
@@ -711,8 +774,8 @@ function renderAll() {
   if(nsw.length>0){
     html+=`<div class="notify card" style="background:#fdeceb;border-color:#f5b5b0;cursor:pointer" onclick="state._showNoSkuList=!state._showNoSkuList;renderAll()"><span class="icon">⚠</span><div class="body"><div class="title" style="color:#b44747">SKU未入力の警告: ${nsw.length}件</div><div class="sub">出品後在庫の色なのにSKUが入力されていません（データには取込まれていません）</div></div><span style="color:var(--muted);font-size:20px">${state._showNoSkuList?'▲':'▼'}</span></div>`;
     if(state._showNoSkuList){
-      html+=`<div class="card section" style="margin-top:-6px"><div class="table-wrap"><table style="font-size:11px"><thead><tr><th>商品名</th><th>仕入日</th><th>仕入先</th><th>シート</th></tr></thead><tbody>`;
-      nsw.slice(0,100).forEach(w=>{html+=`<tr><td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name)}</td><td>${esc(w.date||'—')}</td><td>${esc(w.supplier||'—')}</td><td style="font-size:10px;color:var(--muted)">${esc(w.source||'—')}</td></tr>`;});
+      html+=`<div class="card section" style="margin-top:-6px"><div class="table-wrap"><table style="font-size:11px"><thead><tr><th>No.</th><th>商品名</th><th>仕入日</th><th>仕入先</th><th>シート</th><th>No.列の検出色</th></tr></thead><tbody>`;
+      nsw.slice(0,100).forEach(w=>{const ck=COLOR_KEYS[w.colorKey]||{name:w.colorKey||'?',swatch:'#fff'};const dd=(()=>{const d2=new Date(w.date);return isNaN(d2.getTime())?String(w.date||'—'):d2.getFullYear()+'/'+String(d2.getMonth()+1).padStart(2,'0')+'/'+String(d2.getDate()).padStart(2,'0');})();html+=`<tr><td style="font-weight:700;color:var(--blue-deep)">No.${esc(String(w.row||'—'))}</td><td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(w.name)}</td><td>${dd}</td><td>${esc(w.supplier||'—')}</td><td style="font-size:10px;color:var(--muted)">${esc(w.source||'—')}</td><td><span style="display:inline-flex;align-items:center;gap:4px"><span style="width:13px;height:13px;border-radius:3px;background:${ck.swatch};border:1px solid rgba(0,0,0,.2)"></span>${ck.name}</span></td></tr>`;});
       if(nsw.length>100)html+=`<tr><td colspan="4" style="text-align:center;color:var(--muted)">...他${nsw.length-100}件</td></tr>`;
       html+=`</tbody></table></div><div class="note" style="margin-top:6px;font-size:11px">シート側でSKUを入力して再同期するか、出品前の商品であればNo.列のセルに色を付けて未出品在庫として管理してください</div></div>`;
     }
@@ -958,7 +1021,7 @@ function doGet(e) {
             html+=`<div style="padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--sky);margin-bottom:10px;margin-top:-6px">`;
             // Header row setting
             html+=`<div class="flex" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:700;color:var(--blue-deep)">ヘッダー行</label><input type="number" value="${sh.headerRow||1}" min="1" style="width:80px;padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px" onchange="updateSheetHeaderRow('${sh._id}',this.value)"><label style="font-size:12px;font-weight:700;color:var(--blue-deep)">最大行数</label><input type="number" value="${sh.maxRows||''}" min="0" placeholder="無制限" style="width:110px;padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px" onchange="updateSheetMaxRows('${sh._id}',this.value)"><span style="font-size:11px;color:var(--muted)">変更すると自動で再取得されます</span></div>`;
-            html+=`<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px">${p.headers.length}列・${p.rows.length}行${cm.sku!==undefined?` — <span style="color:var(--blue-deep)">SKU有: ${wSKU}</span>${woSKU>0?` <span style="color:var(--purple)">未出品: ${woSKU}</span>`:''}`:''}` + '</div>';
+            html+=`<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px">${p.headers.length}列・${p.rows.length}行${cm.sku!==undefined?` — <span style="color:var(--blue-deep)">SKU有: ${wSKU}</span>${woSKU>0?` <span style="color:var(--purple)">SKUなし: ${woSKU}</span>`:''}`:''}` + '</div>';
             html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:10px">`;
             FIELDS.forEach(f=>{
               html+=`<div><label style="font-size:10px;font-weight:700;color:${f.req?'var(--blue-deep)':'var(--muted)'};display:block;margin-bottom:3px">${f.label}${f.req?' *':''}</label>`;
@@ -1045,27 +1108,30 @@ function doGet(e) {
 
   // ── CSV Page
   // ── CSV Page
-  html+=`<div class="page ${state.page==='csv'?'active':''}"><div class="card section"><div class="flex-between"><h2 style="margin:0">CSV取込</h2><div class="flex" style="gap:6px"><button class="btn ghost" style="font-size:12px;padding:4px 10px" onclick="document.getElementById('upload-guide').style.display=document.getElementById('upload-guide').style.display==='none'?'block':'none'">⚙ アップロード手順</button><button class="btn danger" style="font-size:12px;padding:4px 10px" onclick="clearAllCSV()">🗑 全CSV一括削除</button></div></div><p class="desc">各販路の在庫・売上データCSVをアップロードします</p>`;
-  // Upload guide (right below title)
-  html+=`<div id="upload-guide" style="display:none;padding:14px;background:#fffbea;border:1px solid #f0d890;border-radius:12px;margin-bottom:14px;font-size:12px;line-height:1.8">
-<h4 style="margin:0 0 8px">📋 各販路のCSVアップロード手順</h4>
-<details style="margin-bottom:8px"><summary style="font-weight:700;cursor:pointer">📦 在庫データ（仕入）</summary>
-<div style="padding:8px 0 0 16px">
+  html+=`<div class="page ${state.page==='csv'?'active':''}"><div class="card section"><div class="flex-between"><h2 style="margin:0">CSV取込</h2><div class="flex" style="gap:6px"><button class="btn ghost" style="font-size:12px;padding:4px 10px" onclick="exportBackup()">💾 バックアップ</button><label class="btn ghost" style="font-size:12px;padding:4px 10px;cursor:pointer">📂 復元<input type="file" accept=".json" style="display:none" onchange="importBackup(this)"></label><button class="btn danger" style="font-size:12px;padding:4px 10px" onclick="clearAllCSV()">🗑 全CSV一括削除</button></div></div><p class="desc">各販路の在庫・売上データCSVをアップロードします</p>`;
+  html+=`<div class="flex" style="gap:10px;align-items:center;margin:18px 0 10px;border-bottom:2px solid var(--blue);padding-bottom:6px"><h3 style="font-size:15px;color:var(--blue-deep);margin:0">📦 在庫データ（仕入）</h3><button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="const g=document.getElementById('guide-stock');g.style.display=g.style.display==='none'?'block':'none'">📋 アップロード手順</button></div>`;
+  html+=`<div id="guide-stock" style="display:none;padding:14px;background:#fffbea;border:1px solid #f0d890;border-radius:12px;margin-bottom:14px;font-size:12px;line-height:1.8">
 <b>プライスター（FBA）（自己配）</b><br>在庫→在庫一覧→在庫ダウンロード→現在庫のダウンロードと編集→現在個ファイルのダウンロード→出品中にチェックをいれ自己配送とFBAを両方ダウンロード<br><br>
 <b>Yahoo!ショッピング</b><br>商品登録→在庫管理→在庫の商品データの項目をダウンロード<br><br>
-<b>メルカリShops</b><br>商品→CSV一括機能→商品データのダウンロード→販売中にチェックを入れ上部の商品登録日時の開始日時を1〜4月、5〜8月、9〜12月と年3回にわけて一つずつ当月まで作成（2024年は4月からスタート）
-</div></details>
-<details style="margin-bottom:8px"><summary style="font-weight:700;cursor:pointer">💰 売上データ（売上）</summary>
-<div style="padding:8px 0 0 16px">
-<b>プライスター</b><br>注文→注文一覧→売れたものリストのダウンロード<br><br>
-<b>メルカリShops</b><br>売上→売上明細ダウンロード→期間を該当月にしCSVファイルを作成<br><br>
-<b>Yahoo!ショッピング</b><br>注文管理→注文処理状況から注文検索をクリック→注文日時を該当月にし注文データダウンロード→商品CSVの箇所の[1〜○]をクリックしダウンロード<br><br>
-<b>メルカリShops 注文データ（SKU取得用）</b><br>注文→CSV一括機能→注文データのダウンロード→フォーマットを通常にチェック、開始日時を該当月にし発送ステータス発送前と発送完了を両方ダウンロード
-</div></details></div>`;
-  html+=`<h3 style="font-size:15px;color:var(--blue-deep);margin:18px 0 10px;border-bottom:2px solid var(--blue);padding-bottom:6px">📦 在庫データ（仕入）</h3>`;
+<b>メルカリShops</b><br>商品→CSV一括機能→商品データのダウンロード→販売中にチェックを入れ、上部の商品登録日時を販売開始から締日23:59まで指定してダウンロード<br><br>
+<b>Amazon返品管理（未処理）</b><br>セラセンの返品レポート→ダウンロード→レポート期間日付→期間選択→CSV形式でダウンロード</div>`;
   [{key:'amazon_fba',label:'プライスター（FBA）（仕入）',desc:'FBA商品CSV',color:'#d47b06'},{key:'amazon_self',label:'プライスター（自己配）（仕入）',desc:'自己発送CSV',color:'#b8860b'},{key:'yahoo',label:'Yahoo!ショッピング（仕入）',desc:'在庫管理CSV',color:'#b4152a'}].forEach(p=>{const cur=state[p.key]||[];const lastT=state.lastUpload[p.key];html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid ${p.color};background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">${p.label}</div><div style="font-size:11px;color:var(--muted)">${p.desc}</div>${lastT?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(lastT).toLocaleString('ja-JP')} ・ ${cur.length}件</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleCSVUpload('${p.key}',this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${cur.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('${p.key}')">削除</button>`:''}</div></div></div>`;});
+  {
+    const _rmbAll=state.reimbursements||[];
+    const _rmbLast=state.lastUpload.reimb;
+    html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #2e7d32;background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">Amazon補填（返金レポート）</div><div style="font-size:11px;color:var(--muted)">セラセンの返金レポートCSV <button class="btn ghost" style="font-size:10px;padding:2px 6px" onclick="document.getElementById('rmb-fmt').style.display=document.getElementById('rmb-fmt').style.display==='none'?'block':'none'">📖 フォーマット</button></div>${_rmbLast?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(_rmbLast).toLocaleString('ja-JP')} ・ 累計${_rmbAll.length}件保管中</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleReimbCSV(this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${_rmbAll.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearReimb()">削除</button>`:''}</div></div>
+<div id="rmb-fmt" style="display:none;padding:10px;background:#f8fafc;border-radius:10px;margin-top:8px;font-size:11px;line-height:1.7">
+<b>対象:</b> セラーセントラルの返金レポート（Amazonが破損・紛失した商品の補填。商品は戻ってきません）<br>
+<b>列:</b> 承認日・返金 ID・sku・商品名・合計返金額 など（レポートをそのままアップロードでOK）<br>
+<b>自動処理:</b><br>
+・返金IDで重複除外し、アップロードした全データを内部に蓄積保管<br>
+・該当SKUを棚卸・販売済から自動削除（シート再同期後も棚卸から除外され続けます）<br>
+・補填利益 = 補填金額 − 仕入金額（シートの仕入価格から自動紐づけ）<br>
+・同一SKUの2回目以降の補填は「補填再評価分」として仕入金額を引かず計上<br>
+・売上管理・ダッシュボード・月次保存の合計に算入（基準月の補填分）</div></div>`;
+  }
   const merCur=state.mercari||[];const merLast=state.lastUpload.mercari;const merFiles=state.mercariFiles||0;
-  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #d0254a;background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">メルカリShops（仕入）</div><div style="font-size:11px;color:var(--muted)">商品データCSV — 複数追加可</div>${merLast?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(merLast).toLocaleString('ja-JP')} ・ ${merCur.length}SKU ・ ${merFiles}ファイル</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleMercariUpload(this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${merCur.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('mercari')">削除</button>`:''}</div></div></div>`;
+  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #d0254a;background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">メルカリShops（仕入）</div><div style="font-size:11px;color:var(--muted)">商品データCSV</div>${merLast?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(merLast).toLocaleString('ja-JP')} ・ ${merCur.length}SKU ・ ${merFiles}ファイル</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleMercariUpload(this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${merCur.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('mercari')">削除</button>`:''}</div></div></div>`;
   html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #5e3ca8;background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">返品管理（未処理）</div><div style="font-size:11px;color:var(--muted)">返品CSVをアップロード <button class="btn ghost" style="font-size:10px;padding:2px 6px" onclick="document.getElementById('ret-fmt').style.display=document.getElementById('ret-fmt').style.display==='none'?'block':'none'">📖 フォーマット</button></div>${state.returns.length>0?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${state.returns.length}件</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleReturnsCSV(this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${state.returns.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('returns')">削除</button>`:''}</div></div>
 <div id="ret-fmt" style="display:none;padding:10px;background:#f8fafc;border-radius:10px;margin-top:8px;font-size:11px;line-height:1.7">
 <b>返品CSVフォーマット:</b> 1行目にヘッダー、以下の列を含めてください。<br>
@@ -1076,8 +1142,13 @@ function doGet(e) {
 ・照合②: ①でリンクしなかった場合のみ、-1を除外した末尾6桁で照合<br>
 ・①②いずれかで一致 → 処理済み（再販済み）として取り込まれません<br>
 ・在庫にも販売データにも存在しないSKUのみ → 未処理の返品として登録されます</div></div>`;
-  html+=`<h3 style="font-size:15px;color:var(--purple);margin:24px 0 10px;border-bottom:2px solid var(--purple);padding-bottom:6px">💰 売上データ（売上）</h3>`;
-  [{key:'sales_priceter',label:'プライスター（売上）',desc:'売上CSV（FBA+自己配統合）',color:'#d47b06'},{key:'sales_mercari',label:'メルカリShops（売上）',desc:'売上CSV',color:'#d0254a'}].forEach(p=>{const cur=state[p.key]||[];const lastT=state.lastUpload[p.key];html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid ${p.color};background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">${p.label}</div><div style="font-size:11px;color:var(--muted)">${p.desc}</div>${lastT?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(lastT).toLocaleString('ja-JP')} ・ ${cur.length}件</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleSalesUpload('${p.key}',this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${cur.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('${p.key}')">削除</button>`:''}</div></div></div>`;});
+  html+=`<div class="flex" style="gap:10px;align-items:center;margin:24px 0 10px;border-bottom:2px solid var(--purple);padding-bottom:6px"><h3 style="font-size:15px;color:var(--purple);margin:0">💰 売上データ（売上）</h3><button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="const g=document.getElementById('guide-sales');g.style.display=g.style.display==='none'?'block':'none'">📋 アップロード手順</button></div>`;
+  html+=`<div id="guide-sales" style="display:none;padding:14px;background:#fffbea;border:1px solid #f0d890;border-radius:12px;margin-bottom:14px;font-size:12px;line-height:1.8">
+<b>プライスター</b><br>注文→注文一覧→売れたものリストのダウンロード<br><br>
+<b>メルカリShops</b><br>売上→売上明細ダウンロード→期間を該当月にしCSVファイルを作成<br><br>
+<b>Yahoo!ショッピング</b><br>注文管理→注文処理状況から注文検索をクリック→注文日時を該当月にし注文データダウンロード→商品CSVの箇所の[1〜○]をクリックしダウンロード<br><br>
+<b>メルカリShops 注文データ（SKU取得用）</b><br>注文→CSV一括機能→注文データのダウンロード→フォーマットを通常にチェック、開始日時を該当月にし発送ステータス発送前と発送完了を両方ダウンロード</div>`;
+  [{key:'sales_priceter',label:'プライスター（売上）',desc:'売上CSV',color:'#d47b06'},{key:'sales_mercari',label:'メルカリShops（売上）',desc:'売上CSV',color:'#d0254a'}].forEach(p=>{const cur=state[p.key]||[];const lastT=state.lastUpload[p.key];html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid ${p.color};background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">${p.label}</div><div style="font-size:11px;color:var(--muted)">${p.desc}</div>${lastT?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${new Date(lastT).toLocaleString('ja-JP')} ・ ${cur.length}件</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleSalesUpload('${p.key}',this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${cur.length>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('${p.key}')">削除</button>`:''}</div></div></div>`;});
   // メルカリ注文データCSV（SKU取得用）
   const moLen=state.mercari_orders.length;
   html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #d0254a;background:#fff;margin-bottom:10px"><div class="flex-between"><div><div style="font-size:14px;font-weight:700">メルカリShops 注文データ（SKU取得用）</div><div style="font-size:11px;color:var(--muted)">注文データCSV（発送前・発送完了）— 複数追加可。売上CSVとorder_idでマッチしSKUを取得</div>${moLen>0?`<div style="font-size:11px;color:var(--muted);margin-top:3px">${moLen}件の注文データ保持中</div>`:''}</div><div class="flex"><input type="file" accept=".csv" onchange="handleMercariOrderUpload(this)" style="border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:12px">${moLen>0?`<button class="btn danger" style="padding:4px 8px;font-size:11px" onclick="clearCSVData('mercari_orders')">削除</button>`:''}</div></div></div>`;
@@ -1091,9 +1162,9 @@ function doGet(e) {
   const yf=state.yahoo_fees;
   html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #b4152a;background:#fff;margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:8px">Yahoo!ショッピング</div><div class="flex" style="gap:10px;flex-wrap:wrap;margin-bottom:8px"><label style="font-size:12px">販売手数料<input type="number" id="yf-comm" value="${yf.commission}" step="0.1" style="width:55px;margin-left:4px" onchange="saveYahooFees()">%</label><label style="font-size:12px">PR広告<input type="number" id="yf-pr" value="${yf.pr_ad}" step="0.1" style="width:55px;margin-left:4px" onchange="saveYahooFees()">%</label></div><div style="font-size:12px;font-weight:600;margin-bottom:4px">クーポン</div><div id="yf-coupons">`;(yf.coupons||[]).forEach((c,i)=>{html+=`<div class="flex" style="gap:4px;margin-bottom:4px"><input value="${esc(c.name)}" placeholder="クーポン名" style="flex:1;font-size:11px;padding:4px 6px" onchange="updateYahooCoupon(${i},'name',this.value)"><input type="number" value="${c.rate}" step="0.1" style="width:50px;font-size:11px;padding:4px" onchange="updateYahooCoupon(${i},'rate',this.value)"><select style="font-size:11px;padding:3px" onchange="updateYahooCoupon(${i},'unit',this.value)"><option value="%" ${c.unit!=='円'?'selected':''}>%</option><option value="円" ${c.unit==='円'?'selected':''}>円</option></select><button class="btn danger" style="padding:2px 5px;font-size:10px" onclick="removeYahooCoupon(${i})">×</button></div>`;});html+=`</div><button class="btn ghost" style="font-size:11px;padding:3px 8px" onclick="addYahooCoupon()">+ クーポン追加</button></div>`;
   // ヤフオク（個人）送料控除設定
-  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #8B4513;background:#fff;margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:4px">ヤフオク（個人アカウント）</div><div style="font-size:11px;color:var(--muted);margin-bottom:8px">「落札者/購入者の支払金額」に含まれる購入者負担の送料を売上から控除します（売上 = 支払金額 − 控除額）。例: 送料一律980円で出品している場合は「980」を入力。送料を受け取っていない場合は0のまま。Yahoo!フリマには適用されません。</div><div class="flex" style="gap:8px;align-items:center"><span style="font-size:12px">送料控除額（円/件）:</span><input type="number" value="${parseInt(state.yafuoku_ship_deduct,10)||0}" onchange="state.yafuoku_ship_deduct=parseInt(this.value,10)||0;save();showBanner('ヤフオク送料控除額を保存しました','ok');renderAll()" style="width:100px;font-size:12px;padding:6px 8px"></div></div>`;
+  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #8B4513;background:#fff;margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:4px">ヤフオク（個人アカウント）</div><div style="font-size:11px;color:var(--muted);margin-bottom:8px">「落札者/購入者の支払金額」に含まれる購入者負担の送料を売上から控除します（売上 = 支払金額 − 控除額）。例: 送料一律980円で出品している場合は「980」を入力。送料を受け取っていない場合は0のまま。Yahoo!フリマには適用されません。<br>※送料の出品者負担分はCSVの「受取金額」から自動判定します（匿名配送の落札者負担は自動で0円扱い）。</div><div class="flex" style="gap:8px;align-items:center"><span style="font-size:12px">送料控除額（円/件）:</span><input type="number" value="${parseInt(state.yafuoku_ship_deduct,10)||0}" onchange="state.yafuoku_ship_deduct=parseInt(this.value,10)||0;save();showBanner('ヤフオク送料控除額を保存しました','ok');renderAll()" style="width:100px;font-size:12px;padding:6px 8px"></div></div>`;
   const af=state.auction_fees;
-  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #7b4d12;background:#fff;margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:8px">ヤフオクストア</div><div class="flex" style="gap:10px;flex-wrap:wrap;margin-bottom:6px"><label style="font-size:12px">販売手数料<input type="number" id="af-comm" value="${af.commission}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label><label style="font-size:12px">PR広告<input type="number" id="af-pr" value="${af.pr_ad}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label></div><div class="flex" style="gap:10px;flex-wrap:wrap;margin-bottom:6px"><label style="font-size:12px">高単価 手数料<input type="number" id="af-hp-rate" value="${af.high_price_rate}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label><label style="font-size:12px">対象¥<input type="number" id="af-hp-th" value="${af.high_price_threshold}" style="width:70px;margin-left:4px" onchange="saveAuctionFees()">以上</label><label style="font-size:12px">達成目標¥<input type="number" id="af-hp-target" value="${af.high_price_target}" style="width:90px;margin-left:4px" onchange="saveAuctionFees()"></label></div><div style="font-size:12px;font-weight:600;margin-bottom:4px">クーポン</div><div id="af-coupons">`;(af.coupons||[]).forEach((c,i)=>{html+=`<div class="flex" style="gap:4px;margin-bottom:4px"><input value="${esc(c.name)}" placeholder="クーポン名" style="flex:1;font-size:11px;padding:4px 6px" onchange="updateAuctionCoupon(${i},'name',this.value)"><input type="number" value="${c.rate}" step="0.1" style="width:50px;font-size:11px;padding:4px" onchange="updateAuctionCoupon(${i},'rate',this.value)"><select style="font-size:11px;padding:3px" onchange="updateAuctionCoupon(${i},'unit',this.value)"><option value="%" ${c.unit!=='円'?'selected':''}>%</option><option value="円" ${c.unit==='円'?'selected':''}>円</option></select><button class="btn danger" style="padding:2px 5px;font-size:10px" onclick="removeAuctionCoupon(${i})">×</button></div>`;});html+=`</div><button class="btn ghost" style="font-size:11px;padding:3px 8px" onclick="addAuctionCoupon()">+ クーポン追加</button></div>`;
+  html+=`<div style="padding:14px 18px;border-radius:12px;border:1px solid var(--line);border-left:4px solid #7b4d12;background:#fff;margin-bottom:10px"><div style="font-size:14px;font-weight:700;margin-bottom:4px">ヤフオクストア</div><div style="font-size:10px;color:var(--muted);margin-bottom:8px">高単価: 対象額以上の商品は「対象額まで販売手数料率・超過分は高単価手数料率」で計算。適用条件は対象商品の販売価格合計が達成目標以上の月（目標0なら常に適用）。PR広告は全額に加算。</div><div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:8px;background:#fff8ec;border:1px solid #f0d890;border-radius:8px"><span style="font-size:11px;font-weight:600">当月のクーポン負担額（合計）:</span><input type="number" value="${parseInt(state.auction_fees.couponBurden,10)||0}" onchange="state.auction_fees.couponBurden=parseInt(this.value,10)||0;save();showBanner('クーポン負担額を保存しました','ok');renderAll()" style="width:110px;font-size:12px;padding:5px 8px">円<span style="font-size:10px;color:var(--muted)">クーポン管理画面の負担合計（アップロード中のCSVの月＝基準月の分）を入力→ヤフオクストアの手数料に加算されます（注文CSVには載らないため）。月次保存時にその月へ焼き込まれます。過去月を保存し直す場合は、先にその月の金額へ書き換えてから保存してください。</span></div><div class="flex" style="gap:10px;flex-wrap:wrap;margin-bottom:6px"><label style="font-size:12px">販売手数料<input type="number" id="af-comm" value="${af.commission}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label><label style="font-size:12px">PR広告<input type="number" id="af-pr" value="${af.pr_ad}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label></div><div class="flex" style="gap:10px;flex-wrap:wrap;margin-bottom:6px"><label style="font-size:12px">高単価 手数料<input type="number" id="af-hp-rate" value="${af.high_price_rate}" step="0.1" style="width:55px;margin-left:4px" onchange="saveAuctionFees()">%</label><label style="font-size:12px">対象¥<input type="number" id="af-hp-th" value="${af.high_price_threshold}" style="width:70px;margin-left:4px" onchange="saveAuctionFees()">以上</label><label style="font-size:12px">達成目標¥<input type="number" id="af-hp-target" value="${af.high_price_target}" style="width:90px;margin-left:4px" onchange="saveAuctionFees()"></label></div><div style="font-size:12px;font-weight:600;margin-bottom:4px">クーポン</div><div id="af-coupons">`;(af.coupons||[]).forEach((c,i)=>{html+=`<div class="flex" style="gap:4px;margin-bottom:4px"><input value="${esc(c.name)}" placeholder="クーポン名" style="flex:1;font-size:11px;padding:4px 6px" onchange="updateAuctionCoupon(${i},'name',this.value)"><input type="number" value="${c.rate}" step="0.1" style="width:50px;font-size:11px;padding:4px" onchange="updateAuctionCoupon(${i},'rate',this.value)"><select style="font-size:11px;padding:3px" onchange="updateAuctionCoupon(${i},'unit',this.value)"><option value="%" ${c.unit!=='円'?'selected':''}>%</option><option value="円" ${c.unit==='円'?'selected':''}>円</option></select><button class="btn danger" style="padding:2px 5px;font-size:10px" onclick="removeAuctionCoupon(${i})">×</button></div>`;});html+=`</div><button class="btn ghost" style="font-size:11px;padding:3px 8px" onclick="addAuctionCoupon()">+ クーポン追加</button></div>`;
   html+=`</div></div>`;
 
   // ── Sales Management Page
@@ -1152,6 +1223,7 @@ function doGet(e) {
   const afComm=state.auction_fees.commission/100;const afPR=state.auction_fees.pr_ad/100;
   const afHPRate=state.auction_fees.high_price_rate/100;const afHPTh=state.auction_fees.high_price_threshold;
   const ysItems=[],yaItems=[];
+  const _yaHpActive=calcAucHpActive(state.sales_yahoo);
   state.sales_yahoo.forEach((r,i)=>{
     const qty=parseInt(r['Quantity']||'0',10)||0;
     if(qty===0)return;
@@ -1163,11 +1235,11 @@ function doGet(e) {
     const orderDate=(r['LeadTimeStart']||r['ReleaseDate']||'').trim().slice(0,10);
     const shipY=parseInt(r['_ship'],10)||0;
     if(!gpfd){
-      const fee=Math.round(sales*(afComm+afPR));
+      const fee=calcAucStoreFee(sales,_yaHpActive);
       const profit=isRefund?0:((r['_profitOverride']!==undefined)?r['_profitOverride']:sales-cost*qty-fee-shipY);
       yaItems.push({sku:itemId,name:title,price,qty,cost,fee,ship:isRefund?0:shipY,sales,profit,date:fmtDate(orderDate),_origIdx:i,hasRefund:isRefund});
     }else{
-      const fee=Math.round(sales*(yfComm+yfPR));
+      const fee=Math.round(sales*(yfComm+yfPR)); // Yahoo!ショッピングは包括レート（ストアポイント原資・キャンペーン原資・決済手数料等を含む想定）
       const profit=isRefund?0:((r['_profitOverride']!==undefined)?r['_profitOverride']:sales-cost*qty-fee-shipY);
       ysItems.push({sku:itemId,name:title,price,qty,cost,fee,ship:isRefund?0:shipY,sales,profit,date:fmtDate(orderDate),_origIdx:i,hasRefund:isRefund});
     }
@@ -1176,6 +1248,9 @@ function doGet(e) {
   const _ys={sales:ysItems.reduce((s,i)=>s+(i.hasRefund?0:i.sales),0),cost:ysItems.reduce((s,i)=>s+(i.hasRefund?0:i.cost*i.qty),0),fee:ysItems.reduce((s,i)=>s+i.fee,0),ship:ysItems.reduce((s,i)=>s+(i.ship||0),0),qty:ysItems.reduce((s,i)=>s+(i.hasRefund?0:i.qty),0),profit:ysItems.reduce((s,i)=>s+(i.hasRefund?0:i.profit),0)-ysRefundFee,items:ysItems,refund:ysRefundTotal,refundFee:ysRefundFee,refundCount:ysRefund.length};
   const yaRefund=yaItems.filter(i=>i.hasRefund);const yaRefundTotal=yaRefund.reduce((s,i)=>s+i.sales,0);const yaRefundFee=yaRefund.reduce((s,i)=>s+i.fee,0);
   const _ya={sales:yaItems.reduce((s,i)=>s+(i.hasRefund?0:i.sales),0),cost:yaItems.reduce((s,i)=>s+(i.hasRefund?0:i.cost*i.qty),0),fee:yaItems.reduce((s,i)=>s+i.fee,0),ship:yaItems.reduce((s,i)=>s+(i.ship||0),0),qty:yaItems.reduce((s,i)=>s+(i.hasRefund?0:i.qty),0),profit:yaItems.reduce((s,i)=>s+(i.hasRefund?0:i.profit),0)-yaRefundFee,items:yaItems,refund:yaRefundTotal,refundFee:yaRefundFee,refundCount:yaRefund.length};
+  // ヤフオクストアのクーポン負担（月次一括・設定値）を手数料に加算
+  const _yaCB=(yaItems.length>0)?(parseInt(state.auction_fees.couponBurden,10)||0):0;
+  if(_yaCB>0){_ya.fee+=_yaCB;_ya.profit-=_yaCB;}
 
   // ヤフオク・Yahoo!フリマ (receive_with_sku CSV)
   const ykItems=[],yfItems=[];
@@ -1189,8 +1264,12 @@ function doGet(e) {
     const aucFeeRaw=(r['Yahoo!オークション 落札システム利用料']||'').toString().trim();
     const aucFee=_numOr0(r['Yahoo!オークション 落札システム利用料']);
     const friFee=_numOr0(r['Yahoo!フリマ 販売手数料']);
-    const shipping=_numOr0(r['送料']);
     const isAuc=aucFeeRaw!==''&&aucFeeRaw!=='-';
+    // 送料の実負担を自動判定: 受取金額 = 支払金額 − 手数料 − 出品者負担送料 から逆算
+    // 匿名配送の落札者負担（出品者の負担・徴収0円）なら自動で0になる
+    const _recvAmt=_numOr0(r['受取金額']);
+    const _rawPay=_numOr0(r['落札者/購入者の支払金額']);
+    const shipping=(r['_shipOverride']!==undefined)?r['_shipOverride']:(_recvAmt>0?Math.max(0,_rawPay-(isAuc?aucFee:friFee)-_recvAmt):_numOr0(r['送料']));
     const _isManualRow=String(r['決済ID']||'').startsWith('manual_');
     const _yd=(isAuc&&!_isManualRow)?(parseInt(state.yafuoku_ship_deduct,10)||0):0;
     const sales=(r['_salesOverride']!==undefined)?r['_salesOverride']:Math.max(0,_numOr0(r['落札者/購入者の支払金額'])-_yd);
@@ -1231,6 +1310,9 @@ function doGet(e) {
   const _rk=_sumManual(rkItems);
   const totalRefund=prTotalRefund;
   const _total={sales:_pr.sales+_me.sales+_ys.sales+_ya.sales+_yk.sales+_yf.sales+_md.sales+_rk.sales,fee:_pr.fee+_me.fee+_ys.fee+_ya.fee+_yk.fee+_yf.fee+_md.fee+_rk.fee,cost:_pr.cost+_me.cost+_ys.cost+_ya.cost+_yk.cost+_yf.cost+_md.cost+_rk.cost,qty:_pr.qty+_me.qty+_ys.qty+_ya.qty+_yk.qty+_yf.qty+_md.qty+_rk.qty,ship:(_pr.ship||0)+(_me.ship||0)+(_ys.ship||0)+(_ya.ship||0)+(_yk.ship||0)+(_yf.ship||0)+(_md.ship||0)+(_rk.ship||0),profit:_pr.profit+_me.profit+_ys.profit+_ya.profit+_yk.profit+_yf.profit+_md.profit+_rk.profit};
+  // Amazon補填（基準月）を合計に算入
+  const _rmSel=_reimbMonth(state.selectedYear,state.selectedMonth);
+  _total.sales+=_rmSel.amt;_total.cost+=_rmSel.cost;_total.profit+=_rmSel.profit;
   const netSales=_total.sales; // returns already subtracted in _pr.sales
 
   // Summary cards - only 売上合計 is clickable
@@ -1254,6 +1336,7 @@ function doGet(e) {
     else{
       const rows=[{l:'売上',v:'¥'+d.sales.toLocaleString()},{l:'個数',v:d.qty+'個'},{l:'手数料',v:'¥'+d.fee.toLocaleString()},{l:'仕入原価',v:'¥'+d.cost.toLocaleString()},{l:'利益',v:'¥'+d.profit.toLocaleString(),c:d.profit>=0?'var(--ok)':'var(--danger)',b:1},{l:'利益率',v:margin+'%'}];
       if((d.ship||0)>0)rows.splice(3,0,{l:'送料',v:'¥'+d.ship.toLocaleString(),c:'var(--warn)'});
+      if(pl.key==='yahoo_auc'&&_yaCB>0)rows.splice(3,0,{l:'（内クーポン負担）',v:'¥'+_yaCB.toLocaleString(),c:'var(--warn)'});
       if(pl.key==='priceter'&&d.refund>0)rows.splice(1,0,{l:'返金('+d.refundCount+'件)',v:'-¥'+d.refund.toLocaleString(),c:'var(--danger)'});
       if(pl.key==='mercari'&&d.refundCount>0){rows.splice(1,0,{l:'返金('+d.refundCount+'件)',v:'-¥'+d.refund.toLocaleString(),c:'var(--danger)'});rows.push({l:'返品手数料',v:'-¥'+d.refundFee.toLocaleString(),c:'var(--danger)'});}
       if((pl.key==='yahoo_shop'||pl.key==='yahoo_auc')&&d.refundCount>0){rows.splice(1,0,{l:'返金('+d.refundCount+'件)',v:'-¥'+d.refund.toLocaleString(),c:'var(--danger)'});rows.push({l:'返品手数料',v:'-¥'+d.refundFee.toLocaleString(),c:'var(--danger)'});}
@@ -1264,8 +1347,28 @@ function doGet(e) {
       html+=`</table>`;
     }
     html+=`</div>`;
+    if(pl.key==='priceter'&&_rmSel.items.length>0){
+      html+=`<div style="padding:14px;border-radius:14px;border:2px solid ${state._reimbOpen?'#2e7d32':'var(--line)'};border-left:4px solid #2e7d32;background:#fff;cursor:pointer" onclick="state._reimbOpen=!state._reimbOpen;renderAll()">`;
+      html+=`<div style="font-size:13px;font-weight:700;color:#2e7d32;margin-bottom:8px">🛡 Amazon補填（${state.selectedYear}/${String(state.selectedMonth).padStart(2,'0')}） ${state._reimbOpen?'▲':'▼'}</div>`;
+      html+=`<table style="width:100%;font-size:12px;border-collapse:collapse">`;
+      [['補填額','¥'+_rmSel.amt.toLocaleString(),''],['補填仕入額','¥'+_rmSel.cost.toLocaleString(),''],['補填利益額','¥'+_rmSel.profit.toLocaleString(),_rmSel.profit>=0?'var(--ok)':'var(--danger)']].forEach(([l2,v2,c2])=>{
+        html+=`<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 0;color:var(--muted)">${l2}</td><td style="padding:4px 0;text-align:right;font-weight:700;${c2?'color:'+c2:''}">${v2}</td></tr>`;
+      });
+      html+=`</table></div>`;
+    }
   });
   html+=`</div>`;
+
+  // ── Amazon補填 明細（展開時）
+  if(state._reimbOpen&&_rmSel.items.length>0){
+    html+=`<div class="card section" style="margin-bottom:16px;border-left:4px solid #2e7d32"><h3 style="font-size:14px;margin-bottom:10px">🛡 Amazon補填 明細（${state.selectedYear}/${String(state.selectedMonth).padStart(2,'0')}）</h3><div class="table-wrap"><table style="font-size:11px"><thead><tr><th>承認日</th><th>SKU</th><th>商品名</th><th>理由</th><th>補填額</th><th>仕入金額</th><th>補填利益</th></tr></thead><tbody>`;
+    _rmSel.items.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).forEach(rr=>{
+      const c3=rr.linked?(rr.cost||0):0;
+      const pf=(rr.amount||0)-c3;
+      html+=`<tr><td>${esc(rr.date||'—')}</td><td>${esc(rr.sku)}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rr.name||'')}${rr.linked?'':' <span style="color:#2e7d32;font-size:10px;font-weight:700">（補填再評価分）</span>'}</td><td style="font-size:10px;color:var(--muted)">${esc(rr.reason||'')}</td><td>¥${(rr.amount||0).toLocaleString()}</td><td>${rr.linked?'¥'+(rr.cost||0).toLocaleString():'—'}</td><td style="font-weight:700;color:${pf>=0?'var(--ok)':'var(--danger)'}">¥${pf.toLocaleString()}</td></tr>`;
+    });
+    html+=`</tbody></table></div></div>`;
+  }
 
   // Detail table (platform or 'all')
   let showItems=[];let showKey='';let showName='';let showIsPr=false;
@@ -1367,13 +1470,15 @@ function doGet(e) {
   // ── Pending Shipping Page
   html+=`<div class="page ${state.page==='pending'?'active':''}"><div class="card section"><h2>納品中在庫</h2><p class="desc">当月仕入のSKUから各販路の在庫・売上を除いた納品中候補</p>`;
   // Year/month selector
-  html+=`<div class="flex" style="gap:6px;margin-bottom:12px;align-items:center"><select id="pd-year" style="width:80px" onchange="state.selectedYear=parseInt(this.value);save();renderAll()">`;
-  for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===state.selectedYear?'selected':''}>${y}</option>`;
-  html+=`</select>年<select id="pd-month" style="width:65px" onchange="state.selectedMonth=parseInt(this.value);save();renderAll()">`;
-  for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${m2===state.selectedMonth?'selected':''}>${m2}</option>`;
+  const _pgEffY=(state._pgY!==undefined)?state._pgY:state.selectedYear;
+  const _pgEffM=(state._pgM!==undefined)?state._pgM:state.selectedMonth;
+  html+=`<div class="flex" style="gap:6px;margin-bottom:12px;align-items:center"><select id="pd-year" style="width:80px" onchange="state._pgY=parseInt(this.value);renderAll()">`;
+  for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===_pgEffY?'selected':''}>${y}</option>`;
+  html+=`</select>年<select id="pd-month" style="width:65px" onchange="state._pgM=parseInt(this.value);renderAll()">`;
+  for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${m2===_pgEffM?'selected':''}>${m2}</option>`;
   html+=`</select>月</div>`;
   // Get selected month purchases SKUs
-  const pdCurY2=state.selectedYear,pdCurM2=state.selectedMonth;
+  const pdCurY2=_pgEffY,pdCurM2=_pgEffM;
   const curMonthSKUs=new Set();
   const pLog2=state.purchaseLog||[];
   if(pLog2.length>0){pLog2.forEach(r=>{const ym=_parseYM(r.date);if(ym&&ym.y===pdCurY2&&ym.m===pdCurM2&&r._sku)curMonthSKUs.add(r._sku);});}
@@ -1399,7 +1504,7 @@ function doGet(e) {
 
   // ── Unlisted Page
   html+=`<div class="page ${state.page==='unlisted'?'active':''}"><div class="card section"><h2>未出品在庫</h2><p class="desc">SKU未割当の仕入商品。No.列のセル色に基づき棚卸に自動計上されています。</p>`;
-  html+=`<div class="note" style="margin-bottom:16px">🔒 <strong>判定ルール:</strong> <span style="background:#f3f3f3;padding:2px 6px;border-radius:4px;margin:0 2px">グレー</span><span style="background:#fce4ec;padding:2px 6px;border-radius:4px;margin:0 2px">ピンク</span>= 未確認 / <span style="background:#f4cccc;padding:2px 6px;border-radius:4px;margin:0 2px">赤</span>= 要確認 / <span style="background:#fff2cc;padding:2px 6px;border-radius:4px;margin:0 2px">黄・黄緑</span>= 納品前 / <span style="background:#d9d2e9;padding:2px 6px;border-radius:4px;margin:0 2px">紫</span>= ヤフオク / <span style="background:#434343;color:#fff;padding:2px 6px;border-radius:4px;margin:0 2px">黒・濃灰</span>= 会社備品 / <span style="background:#cfe2f3;padding:2px 6px;border-radius:4px;margin:0 2px">水色</span>= 整備納品待 → すべて棚卸計上。<span style="background:#fff;border:1px solid #ddd;padding:2px 6px;border-radius:4px;margin:0 2px">白</span>のみ無視</div>`;
+  html+=`<div class="note" style="margin-bottom:16px">${_colorRuleNote()}</div>`;
   // All unlisted items (SKU有+色付き and SKU無 are both in state.unlisted)
   const allUnlisted=[...state.unlisted];
   // Color warning SKUs (always computed for filter use)
@@ -1468,9 +1573,134 @@ function doGet(e) {
   const pendingCount=Object.keys(state.pendingShip).filter(k=>state.pendingShip[k]).length;
   html+=`<div class="card section" style="margin-bottom:16px"><h2 style="font-size:15px">販路別在庫</h2><div class="plat-grid">${Object.entries(PL).map(([k,label])=>{const cnt=items.filter(i=>i.platforms.includes(k)).length;return`<div class="plat-card" style="border-left:4px solid ${PC[k]};cursor:pointer" onclick="document.getElementById('inv-pf').value='${k}';applyInvSort()"><div class="name" style="color:${PC[k]}">${label}</div><div class="num">${cnt} <span style="font-size:12px;font-weight:400;color:var(--muted)">SKU</span></div></div>`;}).join('')}${pendingCount>0?`<div class="plat-card" style="border-left:4px solid #e65100;cursor:pointer" onclick="document.getElementById('inv-pf').value='pending';applyInvSort()"><div class="name" style="color:#e65100">納品中</div><div class="num">${pendingCount} <span style="font-size:12px;font-weight:400;color:var(--muted)">SKU</span></div></div>`:''}</div></div>`;
   html+=`<div class="card section"><h2>棚卸管理</h2><p class="desc">Amazon＋Amazon外＋未出品在庫の最終棚卸リスト</p>`;
-  html+=`<div class="flex" style="margin-bottom:10px;gap:8px;flex-wrap:wrap"><input type="search" id="inv-search" placeholder="SKU・商品名・メーカーで検索" style="min-width:200px"><select id="inv-pf"><option value="all">全て</option><option value="amazon_fba">プライスター(FBA)</option><option value="amazon_self">プライスター(自己配)</option><option value="mercari">メルカリ</option><option value="yahoo">Yahoo!</option><option value="returns">返品(未処理)</option><option value="pending">納品中</option><option value="unlisted">未出品のみ</option></select><select id="inv-age"><option value="0">在庫期間: 全て</option><option value="30">30日以上</option><option value="60">60日以上</option><option value="90">90日以上</option><option value="120">120日以上</option><option value="180">180日以上</option><option value="365">1年以上</option></select><button class="btn ghost" id="inv-multi-btn" onclick="toggleMulti()">併売のみ</button></div>`;
+  html+=`<div class="flex" style="margin-bottom:10px;gap:8px;flex-wrap:wrap"><input type="search" id="inv-search" placeholder="SKU・商品名・メーカーで検索" style="min-width:200px"><select id="inv-pf"><option value="all">全て</option><option value="amazon_fba">プライスター(FBA)</option><option value="amazon_self">プライスター(自己配)</option><option value="mercari">メルカリ</option><option value="yahoo">Yahoo!</option><option value="returns">返品(未処理)</option><option value="pending">納品中</option><option value="unlisted">未出品のみ</option></select><select id="inv-age"><option value="0">在庫期間: 全て</option><option value="30">30日以上</option><option value="60">60日以上</option><option value="90">90日以上</option><option value="120">120日以上</option><option value="180">180日以上</option><option value="365">1年以上</option></select><button class="btn ghost" id="inv-mall-btn" onclick="state._invMallOpen=!state._invMallOpen;renderAll()">🔗 併売/販路絞り込み ${state._invMallOpen?'▲':'▼'}</button></div>`;
+  if(state._invMallOpen){
+    const ms=state._invMallSel||{};
+    const mallDefs=[['amazon_fba','プライスター(FBA)'],['amazon_self','プライスター(自己配)'],['mercari','メルカリ'],['yahoo','Yahoo!']];
+    html+=`<div class="card" style="padding:12px 16px;margin-bottom:12px;border:1px solid #f0d890;background:#fffdf5">`;
+    html+=`<div style="font-size:11px;color:var(--muted);margin-bottom:8px">チェックした販路<b>すべて</b>に出品中の商品だけを表示します（併売の消し忘れ確認用）。単体チェックならそのモールのみで絞り込み。</div>`;
+    html+=`<div class="flex" style="gap:14px;flex-wrap:wrap;align-items:center">`;
+    mallDefs.forEach(([k,l])=>{
+      html+=`<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" ${ms[k]?'checked':''} onchange="toggleInvMall('${k}',this.checked)" style="width:15px;height:15px">${l}</label>`;
+    });
+    html+=`<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;padding-left:10px;border-left:1px solid var(--line)"><input type="checkbox" ${invMulti?'checked':''} onchange="invMulti=this.checked;renderAll()" style="width:15px;height:15px"><b style="color:#d47b06">併売のみ（2販路以上）</b></label>`;
+    html+=`<button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="state._invMallSel={};invMulti=false;renderAll()">クリア</button>`;
+    html+=`</div></div>`;
+  }
   html+=`<div class="flex" style="margin-bottom:16px;gap:8px;flex-wrap:wrap"><select id="inv-sort-key"><option value="default">デフォルト</option><option value="sku_tail_desc">SKU 新しい順（末尾6桁↓）</option><option value="sku_tail_asc">SKU 古い順（末尾6桁↑）</option><option value="age_asc">在庫期間 短い順</option><option value="age_desc">在庫期間 長い順</option><option value="price_desc">単価 高い順</option><option value="price_asc">単価 安い順</option><option value="cost_desc">仕入価格 高い順</option><option value="cost_asc">仕入価格 安い順</option><option value="pl_desc">販路数 多い順</option><option value="pl_asc">販路数 少ない順</option></select><button class="btn primary" onclick="applyInvSort()">検索</button><button class="btn ghost" onclick="selectAllInv()">全選択</button><button class="btn ghost" onclick="clearSelInv()">全解除</button><button class="btn danger" id="inv-del-btn" style="display:none" onclick="deleteSelectedInv()">🗑 削除</button><div class="flex-1"></div><span id="inv-summary" style="font-size:13px;color:var(--muted)"></span><button class="btn primary" onclick="downloadInvCSV()" style="margin-left:10px">📥 CSVダウンロード</button></div>`;
   html+=`<div class="table-wrap"><table style="min-width:900px"><thead><tr><th style="width:40px"></th><th>SKU</th><th>商品名</th><th>在庫数</th><th>単価</th><th>仕入価格</th><th>在庫期間</th><th>ASIN</th><th>販路</th></tr></thead><tbody id="inv-tbody"></tbody></table></div></div></div>`;
+
+  // ── 経費管理ページ
+  html+=`<div class="page ${state.page==='expenses'?'active':''}"><div class="card section"><div class="flex-between"><h2 style="margin:0">経費管理</h2><div style="font-size:13px;font-weight:700;padding:6px 12px;background:#eef5ff;border-radius:8px">📅 ${state.selectedYear}年${state.selectedMonth}月分 <span style="font-size:10px;color:var(--muted);font-weight:400">(ダッシュボードの基準月)</span></div></div><p class="desc">固定費・変動費・その他経費とクレジットカードを管理します。変動費・その他経費は基準月ごとに管理され、固定費は毎月共通です。※現時点では記録・管理用で、利益計算には算入されません</p>`;
+  {
+    const exFixed=state.expenses.fixed||[];
+    const mk2=state.selectedYear+'-'+state.selectedMonth;
+    const exMon=(state.expenses.monthly&&state.expenses.monthly[mk2])||{variable:[],other:[]};
+    const sumOf=a=>(a||[]).reduce((s,e)=>s+(e.amount||0),0);
+    const sumCo=a=>(a||[]).reduce((s,e)=>s+Math.round((e.amount||0)*((e.ratio===undefined?100:e.ratio)/100)),0);
+    const fixedSum=sumCo(exFixed),varSum=sumCo(exMon.variable),othSum=sumCo(exMon.other);
+    const fixedTot=sumOf(exFixed),varTot=sumOf(exMon.variable),othTot=sumOf(exMon.other);
+    // 合計カード（会社負担分メイン・クリックで内訳展開）
+    html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px;margin-bottom:16px">`;
+    [['fixed','🏠 固定費（毎月共通）',fixedSum,fixedTot,'var(--blue-deep)'],['variable','📊 変動費（当月）',varSum,varTot,'var(--warn)'],['other','📎 その他経費（当月）',othSum,othTot,'var(--purple)'],[null,'当月経費合計',fixedSum+varSum+othSum,fixedTot+varTot+othTot,'var(--danger)']].forEach(([cat,l,v,tot,cl])=>{
+      const drillable=cat!==null;
+      const active=drillable&&state._expDrill&&state._expDrill.cat===cat;
+      html+=`<div style="padding:12px;background:#fff;border-radius:12px;border:2px solid ${active?cl:'var(--line)'};text-align:center;${drillable?'cursor:pointer':''}" ${drillable?`onclick="state._expDrill=(state._expDrill&&state._expDrill.cat==='${cat}'&&!state._expDrill.account)?null:{cat:'${cat}'};renderAll()"`:''}><div style="font-size:11px;color:var(--muted)">${l}${drillable?' ▼':''}</div><div style="font-size:17px;font-weight:800;color:${cl}">¥${v.toLocaleString()}</div><div style="font-size:10px;color:var(--muted)">総額 ¥${tot.toLocaleString()}</div></div>`;
+    });
+    html+=`</div>`;
+    // ドリルダウン: 内訳カード（勘定科目ごと）
+    const catDefs={fixed:['🏠 固定費','var(--blue-deep)',exFixed],variable:['📊 変動費','var(--warn)',exMon.variable],other:['📎 その他経費','var(--purple)',exMon.other]};
+    if(state._expDrill&&catDefs[state._expDrill.cat]){
+      const [dLabel,dColor,dArr]=catDefs[state._expDrill.cat];
+      const dCat=state._expDrill.cat;
+      const groups={};
+      (dArr||[]).forEach(e=>{const a=e.account||'未分類';(groups[a]=groups[a]||[]).push(e);});
+      html+=`<div class="card" style="padding:14px;margin-bottom:12px;border:2px solid ${dColor}"><div class="flex-between" style="margin-bottom:8px"><div style="font-size:13px;font-weight:700">${dLabel} — 勘定科目別内訳</div><button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="state._expDrill=null;renderAll()">✕ 閉じる</button></div>`;
+      const gKeys=Object.keys(groups);
+      if(gKeys.length===0){html+=`<div style="font-size:12px;color:var(--muted)">未登録</div>`;}
+      else{
+        html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px">`;
+        gKeys.forEach(a=>{
+          const g=groups[a];
+          const sel=state._expDrill.account===a;
+          html+=`<div style="padding:10px;background:${sel?'#eef5ff':'#f8fafc'};border-radius:10px;border:1px solid ${sel?dColor:'var(--line)'};cursor:pointer" onclick="state._expDrill={cat:'${dCat}',account:'${a.replace(/'/g,"\\'")}'};renderAll()"><div style="font-size:11px;font-weight:600">${esc(a)} ▼</div><div style="font-size:14px;font-weight:800;color:${dColor}">¥${sumCo(g).toLocaleString()}</div><div style="font-size:10px;color:var(--muted)">${g.length}件 ・ 総額¥${sumOf(g).toLocaleString()}</div></div>`;
+        });
+        html+=`</div>`;
+      }
+      html+=`</div>`;
+      // 明細カード（選択した科目）
+      if(state._expDrill.account!==undefined&&groups[state._expDrill.account]){
+        const acc=state._expDrill.account;
+        const items=groups[acc];
+        html+=`<div class="card" style="padding:14px;margin-bottom:12px;border:1px solid ${dColor};border-left:4px solid ${dColor}"><div class="flex-between" style="margin-bottom:8px"><div style="font-size:13px;font-weight:700">📄 ${esc(acc)} の明細（${dLabel.replace(/^[^ ]+ /,'')}）</div><button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="state._expDrill={cat:'${dCat}'};renderAll()">✕ 閉じる</button></div>`;
+        html+=`<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="border-bottom:2px solid var(--line)"><th style="text-align:left;padding:4px 0">タイトル</th><th style="text-align:right">金額</th><th style="text-align:right">会社負担</th><th style="text-align:right">計上額</th><th></th></tr></thead><tbody>`;
+        items.forEach(e=>{
+          const ratio=e.ratio===undefined?100:e.ratio;
+          const co=Math.round((e.amount||0)*ratio/100);
+          const open=state._expDetail===e.id;
+          html+=`<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:6px 0">${esc(e.title)}${e.memo?`<div style="font-size:10px;color:var(--muted)">📝 ${esc(e.memo)}</div>`:''}</td><td style="text-align:right">¥${(e.amount||0).toLocaleString()}</td><td style="text-align:right">${ratio}%</td><td style="text-align:right;font-weight:700">¥${co.toLocaleString()}</td><td style="text-align:right;white-space:nowrap"><button class="btn ghost" style="padding:2px 8px;font-size:10px" onclick="state._expDetail=state._expDetail==='${e.id}'?null:'${e.id}';renderAll()">${open?'▲':'詳細'}</button> <button class="btn danger" style="padding:2px 8px;font-size:10px" onclick="deleteExpense('${dCat}','${e.id}')">削除</button></td></tr>`;
+          if(open){
+            const accList=[...((state.expenseAccounts&&state.expenseAccounts[dCat])||[])];
+            if(!accList.includes(e.account||'未分類'))accList.push(e.account||'未分類');
+            if(!accList.includes('未分類'))accList.push('未分類');
+            html+=`<tr style="background:#f8fbff"><td colspan="5" style="padding:8px"><div class="flex" style="gap:12px;flex-wrap:wrap;align-items:center;font-size:12px"><span>タイトル: <input type="text" value="${esc(e.title)}" onchange="setExpField('${dCat}','${e.id}','title',this.value)" style="width:180px;font-size:12px;padding:4px 6px"></span><span>金額: <input type="number" value="${e.amount||0}" onchange="setExpField('${dCat}','${e.id}','amount',this.value)" style="width:90px;font-size:12px;padding:4px 6px">円</span><span>会社負担割合: <input type="number" min="0" max="100" value="${ratio}" onchange="setExpRatio('${dCat}','${e.id}',this.value)" style="width:60px;font-size:12px;padding:4px 6px">%（自己負担 ${100-ratio}%）</span><span>勘定科目: <select onchange="setExpAccount('${dCat}','${e.id}',this.value)" style="font-size:12px">${accList.map(a=>`<option value="${a}" ${a===(e.account||'未分類')?'selected':''}>${a}</option>`).join('')}</select></span></div><div style="margin-top:6px;font-size:12px">メモ: <input type="text" value="${esc(e.memo||'')}" placeholder="例: 床面積按分30% / ○月分" onchange="setExpField('${dCat}','${e.id}','memo',this.value)" style="width:min(420px,90%);font-size:12px;padding:4px 6px"></div></td></tr>`;
+          }
+        });
+        html+=`</tbody></table></div>`;
+      }
+    }
+
+    // 追加フォーム
+    html+=`<div class="card" style="padding:14px;margin-bottom:16px;background:#f8fbff;border:1px solid var(--line)"><div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ 経費を追加</div><div class="flex" style="gap:8px;flex-wrap:wrap;align-items:end"><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">種類</div><select id="exp-cat" style="width:120px" onchange="updateExpAccOptions()"><option value="fixed">固定費</option><option value="variable">変動費</option><option value="other">その他経費</option></select></div><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">勘定科目</div><select id="exp-account" style="width:210px">${((state.expenseAccounts&&state.expenseAccounts.fixed)||[]).map(a=>`<option value="${a}">${a}</option>`).join('')}<option value="未分類">未分類</option></select></div><div style="flex:1;min-width:150px"><div style="font-size:11px;color:var(--muted);margin-bottom:2px">タイトル</div><input type="text" id="exp-title" placeholder="例: 家賃、プライスター利用料" style="width:100%;font-size:13px;padding:7px 9px"></div><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">金額</div><input type="number" id="exp-amount" placeholder="0" style="width:110px;font-size:13px;padding:7px 9px"></div><button class="btn primary" onclick="addExpense()">追加</button></div>
+<div style="margin-top:8px"><button class="btn ghost" style="font-size:11px;padding:3px 10px" onclick="state._expAccOpen=!state._expAccOpen;renderAll()">⚙ 勘定科目を編集 ${state._expAccOpen?'▲':'▼'}</button></div>
+${state._expAccOpen?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:8px;padding:10px;background:#fff;border-radius:10px;border:1px solid var(--line)">${[['fixed','固定費'],['variable','変動費'],['other','その他']].map(([k,l])=>`<div><div style="font-size:11px;font-weight:700;margin-bottom:4px">${l}の科目</div>${((state.expenseAccounts&&state.expenseAccounts[k])||[]).map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:2px 0;border-bottom:1px solid #f5f5f5"><span>${a}</span><button class="btn danger" style="padding:1px 6px;font-size:9px" onclick="deleteExpAccount('${k}','${a.replace(/'/g,"\\'")}')">×</button></div>`).join('')}<div class="flex" style="gap:4px;margin-top:5px"><input type="text" id="acc-new-${k}" placeholder="新しい科目" style="flex:1;font-size:11px;padding:4px 6px"><button class="btn primary" style="padding:3px 8px;font-size:10px" onclick="addExpAccount('${k}')">追加</button></div></div>`).join('')}</div>`:''}
+<div style="font-size:10px;color:var(--muted);margin-top:6px">経費は「会社負担割合」で按分できます（登録時は100%。明細の詳細ボタンで変更）。固定費は月を跨いで維持、変動費・その他経費は基準月（${state.selectedYear}年${state.selectedMonth}月）ごとの管理です。合計カードをクリックすると勘定科目別の内訳→明細を確認できます。</div></div>`;
+    // クレカ管理
+    html+=`<h3 style="font-size:15px;color:var(--blue-deep);margin:22px 0 10px;border-bottom:2px solid var(--blue);padding-bottom:6px">💳 クレジットカード管理</h3>`;
+    html+=`<div style="font-size:11px;color:var(--muted);margin-bottom:10px">締め日・請求日・枠を登録して、仕入時のカード使い分けに活用してください。</div>`;
+    html+=`<div class="card" style="padding:14px;margin-bottom:12px;background:#f8fbff;border:1px solid var(--line)"><div class="flex" style="gap:8px;flex-wrap:wrap;align-items:end"><div style="flex:1;min-width:140px"><div style="font-size:11px;color:var(--muted);margin-bottom:2px">クレカ名</div><input type="text" id="cc-name" placeholder="例: 楽天カード" style="width:100%;font-size:13px;padding:7px 9px"></div><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">締め日</div><input type="text" id="cc-closing" placeholder="例: 毎月末" style="width:100px;font-size:13px;padding:7px 9px"></div><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">請求日</div><input type="text" id="cc-billing" placeholder="例: 翌月27日" style="width:100px;font-size:13px;padding:7px 9px"></div><div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">クレカ枠</div><input type="number" id="cc-limit" placeholder="500000" style="width:110px;font-size:13px;padding:7px 9px"></div><button class="btn primary" onclick="addCreditCard()">登録</button></div></div>`;
+    const ccs=state.creditCards||[];
+    if(ccs.length>0){
+      html+=`<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>クレカ名</th><th>締め日</th><th>請求日</th><th>クレカ枠</th><th></th></tr></thead><tbody>`;
+      ccs.forEach(cc2=>{html+=`<tr><td style="font-weight:600">${esc(cc2.name)}</td><td>${esc(cc2.closing||'—')}</td><td>${esc(cc2.billing||'—')}</td><td>${cc2.limit?'¥'+cc2.limit.toLocaleString():'—'}</td><td style="text-align:right"><button class="btn danger" style="padding:2px 8px;font-size:10px" onclick="deleteCreditCard('${cc2.id}')">削除</button></td></tr>`;});
+      html+=`</tbody></table></div>`;
+    }else{
+      html+=`<div style="font-size:12px;color:var(--muted)">カード未登録</div>`;
+    }
+    // ── 借入金管理
+    html+=`<h3 style="font-size:15px;color:#8B4513;margin:22px 0 10px;border-bottom:2px solid #8B4513;padding-bottom:6px">🏦 借入金管理</h3>`;
+    const lns=state.loans||[];
+    const lnTotalBal=lns.reduce((s,l)=>s+calcLoanStatus(l).balance,0);
+    const lnTotalCur=lns.reduce((s,l)=>s+calcLoanStatus(l).curPay,0);
+    html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-bottom:12px">`;
+    [['借入残高合計（概算）',lnTotalBal,'var(--danger)'],['当月返済合計',lnTotalCur,'#8B4513']].forEach(([l,v,cl])=>{
+      html+=`<div style="padding:12px;background:#fff;border-radius:12px;border:1px solid var(--line);text-align:center"><div style="font-size:11px;color:var(--muted)">${l}</div><div style="font-size:17px;font-weight:800;color:${cl}">¥${v.toLocaleString()}</div></div>`;
+    });
+    html+=`</div>`;
+    html+=`<div class="card" style="padding:14px;margin-bottom:12px;background:#fdf9f4;border:1px solid #e5d5c0"><div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ 借入金を追加</div><div class="flex" style="gap:8px;flex-wrap:wrap;align-items:end">
+<div style="flex:1;min-width:140px"><div style="font-size:11px;color:var(--muted);margin-bottom:2px">タイトル（借入先）</div><input type="text" id="ln-title" placeholder="例: ○○銀行 事業融資" style="width:100%;font-size:13px;padding:7px 9px"></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">借入額（元本）</div><input type="number" id="ln-principal" placeholder="3000000" style="width:120px;font-size:13px;padding:7px 9px"></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">年利（%）</div><input type="number" id="ln-rate" step="0.01" placeholder="2.5" style="width:80px;font-size:13px;padding:7px 9px"></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">返済回数（ヶ月）</div><input type="number" id="ln-months" placeholder="60" style="width:90px;font-size:13px;padding:7px 9px"></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">返済方式</div><select id="ln-method" style="width:110px"><option value="ganri">元利均等</option><option value="genkin">元金均等</option></select></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">返済開始月</div><input type="month" id="ln-start" style="font-size:13px;padding:6px 8px"></div>
+<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">月々返済額（任意・手入力優先）</div><input type="number" id="ln-manual" placeholder="自動計算" style="width:110px;font-size:13px;padding:7px 9px"></div>
+<button class="btn primary" onclick="addLoan()">登録</button></div>
+<div style="font-size:10px;color:var(--muted);margin-top:6px">月々返済額は借入額・年利・回数・方式から自動計算されます（元利均等: 毎月一定 / 元金均等: 初回が最大で徐々に減少）。手入力した場合はその金額を優先します。</div></div>`;
+    if(lns.length>0){
+      html+=`<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>タイトル</th><th>借入額</th><th>年利</th><th>回数</th><th>方式</th><th>月々返済額</th><th>返済状況</th><th>残高（概算）</th><th>完済予定</th><th></th></tr></thead><tbody>`;
+      lns.forEach(l=>{
+        const pay=calcLoanPay(l);const st2=calcLoanStatus(l);
+        const payStr=(l.method==='genkin'&&!(l.manualPay>0))?`¥${pay.first.toLocaleString()}〜¥${pay.last.toLocaleString()}`:`¥${pay.monthly.toLocaleString()}`;
+        html+=`<tr><td style="font-weight:600">${esc(l.title)}${l.manualPay>0?' <span style="font-size:9px;color:var(--muted)">(手入力)</span>':''}</td><td>¥${l.principal.toLocaleString()}</td><td>${l.rate}%</td><td>${l.months}回</td><td>${l.method==='genkin'?'元金均等':'元利均等'}</td><td style="font-weight:700">${payStr}</td><td>${st2.elapsed}/${l.months}回${st2.elapsed>=l.months?' <span style="color:var(--ok)">完済</span>':''}</td><td style="color:${st2.balance>0?'var(--danger)':'var(--ok)'}">¥${st2.balance.toLocaleString()}</td><td>${st2.endY}/${String(st2.endM).padStart(2,'0')}</td><td style="text-align:right"><button class="btn danger" style="padding:2px 8px;font-size:10px" onclick="deleteLoan('${l.id}')">削除</button></td></tr>`;
+      });
+      html+=`</tbody></table></div>`;
+      html+=`<div style="font-size:10px;color:var(--muted);margin-top:6px">返済状況・残高は基準月（${state.selectedYear}年${state.selectedMonth}月）時点の概算です。繰上返済等は反映されません。</div>`;
+    }else{
+      html+=`<div style="font-size:12px;color:var(--muted)">借入金未登録</div>`;
+    }
+  }
+  html+=`</div></div>`;
 
   // ── Purchases List Page (仕入管理)
   // Build ALL purchase items (not filtered by date yet)
@@ -1492,12 +1722,12 @@ function doGet(e) {
 
   html+=`<div class="page ${state.page==='purchases_list'?'active':''}">`;
   // Summary card (same as dashboard)
-  const plFilterY=parseInt(document.getElementById('pl-year')?.value)||state.selectedYear;
-  const plFilterM=document.getElementById('pl-month')?.value||String(state.selectedMonth);
-  const plFilterD=document.getElementById('pl-day')?.value||'';
-  const plRangeMode=document.getElementById('pl-range')?.value||'off';
-  const plRangeEY=parseInt(document.getElementById('pl-ey')?.value)||curY;
-  const plRangeEM=document.getElementById('pl-em')?.value||String(curM);
+  const plFilterY=(state._plY!==undefined)?state._plY:state.selectedYear;
+  const plFilterM=(state._plM!==undefined)?String(state._plM):String(state.selectedMonth);
+  const plFilterD=(state._plD!==undefined)?String(state._plD):'';
+  const plRangeMode=state._plRange||'off';
+  const plRangeEY=(state._plEY!==undefined)?state._plEY:state.selectedYear;
+  const plRangeEM=(state._plEM!==undefined)?String(state._plEM):String(state.selectedMonth);
   
   let dateFiltItems=allPurchItems;
   if(plRangeMode==='on'){
@@ -1528,15 +1758,15 @@ function doGet(e) {
   html+=`<div class="card section">`;
   // Date filter controls
   html+=`<div class="flex" style="gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">`;
-  html+=`<select id="pl-year" style="width:80px" onchange="state.selectedYear=parseInt(this.value);save();renderAll()">`;for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===plFilterY?'selected':''}>${y}</option>`;
+  html+=`<select id="pl-year" style="width:80px" onchange="state._plY=parseInt(this.value);renderAll()">`;for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===plFilterY?'selected':''}>${y}</option>`;
   html+=`</select>年`;
-  html+=`<select id="pl-month" style="width:65px" onchange="if(this.value!=='all'){state.selectedMonth=parseInt(this.value);save();}renderAll()"><option value="all" ${plFilterM==='all'?'selected':''}>全月</option>`;for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${plFilterM===String(m2)?'selected':''}>${m2}</option>`;
+  html+=`<select id="pl-month" style="width:65px" onchange="state._plM=this.value;renderAll()"><option value="all" ${plFilterM==='all'?'selected':''}>全月</option>`;for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${plFilterM===String(m2)?'selected':''}>${m2}</option>`;
   html+=`</select>月`;
-  html+=`<input type="number" id="pl-day" value="${plFilterD}" placeholder="日(任意)" min="1" max="31" style="width:70px;font-size:12px;padding:5px">`;
-  html+=`<select id="pl-range" style="width:80px"><option value="off" ${plRangeMode==='off'?'selected':''}>単月</option><option value="on" ${plRangeMode==='on'?'selected':''}>期間</option></select>`;
+  html+=`<input type="number" id="pl-day" value="${plFilterD}" placeholder="日(任意)" min="1" max="31" style="width:70px;font-size:12px;padding:5px" onchange="state._plD=this.value;renderAll()">`;
+  html+=`<select id="pl-range" style="width:80px" onchange="state._plRange=this.value;renderAll()"><option value="off" ${plRangeMode==='off'?'selected':''}>単月</option><option value="on" ${plRangeMode==='on'?'selected':''}>期間</option></select>`;
   if(plRangeMode==='on'){
-    html+=`<span style="margin:0 4px">〜</span><select id="pl-ey" style="width:80px">`;for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===plRangeEY?'selected':''}>${y}</option>`;
-    html+=`</select>年<select id="pl-em" style="width:65px">`;for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${plRangeEM===String(m2)?'selected':''}>${m2}</option>`;
+    html+=`<span style="margin:0 4px">〜</span><select id="pl-ey" style="width:80px" onchange="state._plEY=parseInt(this.value);renderAll()">`;for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===plRangeEY?'selected':''}>${y}</option>`;
+    html+=`</select>年<select id="pl-em" style="width:65px" onchange="state._plEM=this.value;renderAll()">`;for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${plRangeEM===String(m2)?'selected':''}>${m2}</option>`;
     html+=`</select>月`;
   }
   html+=`</div>`;
@@ -1563,11 +1793,7 @@ function doGet(e) {
   // ── Analysis Page (月次分析)
   html+=`<div class="page ${state.page==='analysis'?'active':''}"><div class="card section"><h2>月次分析</h2><p class="desc">月別の売上・棚卸・仕入データを保存し、事業推移を分析</p>`;
   const now2=new Date();
-  html+=`<div class="flex" style="gap:8px;margin-bottom:20px;flex-wrap:wrap"><select id="save-year" style="width:90px">`;
-  for(let y=2024;y<=2030;y++)html+=`<option value="${y}" ${y===now2.getFullYear()?'selected':''}>${y}年</option>`;
-  html+=`</select><select id="save-month" style="width:70px">`;
-  for(let m2=1;m2<=12;m2++)html+=`<option value="${m2}" ${m2===now2.getMonth()+1?'selected':''}>${m2}月</option>`;
-  html+=`</select><button class="btn primary" onclick="saveMonthlyData()">💾 月次データを保存</button><button class="btn ghost" onclick="state._manualMonthOpen=!state._manualMonthOpen;renderAll()">➕ 過去データを手動追加</button></div>`;
+  html+=`<div class="flex" style="gap:8px;margin-bottom:20px;flex-wrap:wrap"><span style="font-size:13px;font-weight:700;padding:6px 10px;background:#eef5ff;border-radius:8px">保存対象: ${state.selectedYear}年${state.selectedMonth}月 <span style="font-size:10px;color:var(--muted);font-weight:400">(ダッシュボードの基準月)</span></span><button class="btn primary" onclick="saveMonthlyData()">💾 月次データを保存</button><button class="btn ghost" onclick="state._manualMonthOpen=!state._manualMonthOpen;renderAll()">➕ 過去データを手動追加</button></div>`;
   // ═══ 過去月の手動追加フォーム ═══
   if(state._manualMonthOpen){
     const mmPlats=['プライスター','メルカリShops','Yahoo!ショッピング','ヤフオクストア','ヤフオク','Yahoo!フリマ','メルカリ','ラクマ'];
@@ -1971,7 +2197,7 @@ function doGet(e) {
     if(em){
       html+=`<div class="card section" style="margin-top:14px;border:2px solid var(--blue)"><h3 style="font-size:14px;margin-bottom:10px">✏ ${em.year}年${em.month}月のデータを編集</h3>`;
       html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">`;
-      [{k:'sales',l:'売上'},{k:'refund',l:'返金'},{k:'fees',l:'手数料'},{k:'cost',l:'仕入原価（売上）'},{k:'profit',l:'利益'},{k:'qty',l:'販売個数'},{k:'invCount',l:'棚卸数'},{k:'invCost',l:'棚卸原価'},{k:'purchases',l:'月間仕入額'}].forEach(f=>{
+      [{k:'sales',l:'売上'},{k:'refund',l:'返金'},{k:'fees',l:'手数料'},{k:'cost',l:'仕入原価（売上）'},{k:'profit',l:'利益'},{k:'qty',l:'販売個数'},{k:'invCount',l:'棚卸数'},{k:'invCost',l:'棚卸原価'},{k:'purchases',l:'月間仕入額'},{k:'purchaseCount',l:'仕入個数'}].forEach(f=>{
         html+=`<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px">${f.l}</div><input type="number" id="em-${f.k}" value="${em[f.k]||0}" style="width:100%;font-size:13px;padding:6px 8px"></div>`;
       });
       html+=`</div><div class="flex" style="gap:8px;margin-top:12px"><button class="btn primary" onclick="saveEditedMonth('${em.id}')">保存</button><button class="btn ghost" onclick="state._editingMonth=null;renderAll()">キャンセル</button></div></div>`;
@@ -1981,7 +2207,7 @@ function doGet(e) {
 
   // Save search/filter values before re-render
   const _saved={};
-  ['prod-search','ul-search','ul-status-filter','na-search','na-pf-filter','inv-search','inv-pf','inv-age','inv-sort-key','pd-search','sl-search','sl-sort','pl-search','pl-sort','pl-year','pl-month','pl-day','pl-range','pl-ey','pl-em','range-sy','range-sm','range-ey','range-em','detail-month','a-sl-search','a-sl-sort','a-pl-search','a-pl-sort','a-inv-search','rs-search','rs-sort','rp-search','rp-sort','ri-search'].forEach(id=>{
+  ['prod-search','ul-search','ul-status-filter','na-search','na-pf-filter','inv-search','inv-pf','inv-age','inv-sort-key','pd-search','sl-search','sl-sort','pl-search','pl-sort','range-sy','range-sm','range-ey','range-em','detail-month','a-sl-search','a-sl-sort','a-pl-search','a-pl-sort','a-inv-search','rs-search','rs-sort','rp-search','rp-sort','ri-search'].forEach(id=>{
     const el=document.getElementById(id);if(el)_saved[id]=el.value;
   });
 
@@ -2007,6 +2233,176 @@ function doGet(e) {
 
 let invSort={key:'default'};
 let invMulti=false;
+// ═══ 経費管理 ═══
+function _expMonthKey(){return state.selectedYear+'-'+state.selectedMonth;}
+function _expMonthData(){
+  const mk=_expMonthKey();
+  if(!state.expenses.monthly)state.expenses.monthly={};
+  if(!state.expenses.monthly[mk])state.expenses.monthly[mk]={variable:[],other:[]};
+  return state.expenses.monthly[mk];
+}
+function addExpense(){
+  const cat=document.getElementById('exp-cat')?.value||'fixed';
+  const title=(document.getElementById('exp-title')?.value||'').trim();
+  const amount=parseInt(document.getElementById('exp-amount')?.value,10)||0;
+  if(!title){showBanner('タイトルを入力してください','err');return;}
+  if(amount<=0){showBanner('金額を入力してください','err');return;}
+  const account=document.getElementById('exp-account')?.value||'未分類';
+  const item={id:'ex_'+Date.now(),title,amount,account,ratio:100};
+  if(cat==='fixed'){
+    if(!state.expenses.fixed)state.expenses.fixed=[];
+    state.expenses.fixed.push(item);
+  }else{
+    const md=_expMonthData();
+    (cat==='variable'?md.variable:md.other).push(item);
+  }
+  save();
+  document.getElementById('exp-title').value='';
+  document.getElementById('exp-amount').value='';
+  showBanner('経費を追加しました','ok');renderAll();
+}
+window.addExpense=addExpense;
+function updateExpAccOptions(){
+  const cat=document.getElementById('exp-cat')?.value||'fixed';
+  const sel=document.getElementById('exp-account');if(!sel)return;
+  const list=(state.expenseAccounts&&state.expenseAccounts[cat])||[];
+  sel.innerHTML=list.map(a=>`<option value="${a}">${a}</option>`).join('')+'<option value="未分類">未分類</option>';
+}
+window.updateExpAccOptions=updateExpAccOptions;
+function addExpAccount(cat){
+  const el=document.getElementById('acc-new-'+cat);if(!el)return;
+  const name=(el.value||'').trim();
+  if(!name){showBanner('科目名を入力してください','err');return;}
+  if(!state.expenseAccounts[cat])state.expenseAccounts[cat]=[];
+  if(state.expenseAccounts[cat].includes(name)){showBanner('同名の科目があります','err');return;}
+  state.expenseAccounts[cat].push(name);
+  save();showBanner('勘定科目「'+name+'」を追加しました','ok');renderAll();
+}
+window.addExpAccount=addExpAccount;
+function deleteExpAccount(cat,name){
+  // 使用中チェック（固定費 + 全月の変動/その他）
+  const used=(state.expenses.fixed||[]).some(e=>e.account===name)||Object.values(state.expenses.monthly||{}).some(m=>[...(m.variable||[]),...(m.other||[])].some(e=>e.account===name));
+  if(used){showBanner('この科目は使用中のため削除できません（該当経費の科目を変更してから削除してください）','err');return;}
+  state.expenseAccounts[cat]=(state.expenseAccounts[cat]||[]).filter(a=>a!==name);
+  save();renderAll();
+}
+window.deleteExpAccount=deleteExpAccount;
+function setExpRatio(cat,id,val){
+  const arr=cat==='fixed'?(state.expenses.fixed||[]):((_expMonthData()[cat])||[]);
+  const e=arr.find(x=>x.id===id);if(!e)return;
+  e.ratio=Math.max(0,Math.min(100,parseInt(val,10)||0));
+  save();renderAll();
+}
+window.setExpRatio=setExpRatio;
+function setExpField(cat,id,field,val){
+  const arr=cat==='fixed'?(state.expenses.fixed||[]):((_expMonthData()[cat])||[]);
+  const e=arr.find(x=>x.id===id);if(!e)return;
+  if(field==='title'){const t=(val||'').trim();if(!t){showBanner('タイトルは空にできません','err');renderAll();return;}e.title=t;}
+  else if(field==='amount'){e.amount=Math.max(0,parseInt(val,10)||0);}
+  else if(field==='memo'){e.memo=(val||'').trim();}
+  save();renderAll();
+}
+window.setExpField=setExpField;
+function setExpAccount(cat,id,val){
+  const arr=cat==='fixed'?(state.expenses.fixed||[]):((_expMonthData()[cat])||[]);
+  const e=arr.find(x=>x.id===id);if(!e)return;
+  e.account=val;save();renderAll();
+}
+window.setExpAccount=setExpAccount;
+function deleteExpense(cat,id){
+  if(cat==='fixed'){state.expenses.fixed=(state.expenses.fixed||[]).filter(e=>e.id!==id);}
+  else{const md=_expMonthData();md[cat]=(md[cat]||[]).filter(e=>e.id!==id);}
+  save();renderAll();
+}
+window.deleteExpense=deleteExpense;
+// 借入金: 月々返済額の自動計算
+function calcLoanPay(loan){
+  const P=loan.principal||0, n=loan.months||1, rr=(loan.rate||0)/100/12;
+  if(loan.manualPay>0)return{monthly:loan.manualPay,first:loan.manualPay,last:loan.manualPay};
+  if(loan.method==='genkin'){ // 元金均等: 元金一定+残高利息（初回最大）
+    const base=Math.round(P/n);
+    return{monthly:base+Math.round(P*rr),first:base+Math.round(P*rr),last:base+Math.round((P-base*(n-1))*rr),genkinBase:base};
+  }
+  // 元利均等（デフォルト）
+  if(rr===0)return{monthly:Math.round(P/n),first:Math.round(P/n),last:Math.round(P/n)};
+  const m=Math.round(P*rr*Math.pow(1+rr,n)/(Math.pow(1+rr,n)-1));
+  return{monthly:m,first:m,last:m};
+}
+// 基準月時点の返済済み回数と残高概算
+function calcLoanStatus(loan){
+  const n=loan.months||1, rr=(loan.rate||0)/100/12, P=loan.principal||0;
+  const elapsed=Math.max(0,Math.min(n,(state.selectedYear-loan.startY)*12+(state.selectedMonth-loan.startM)+1));
+  const pay=calcLoanPay(loan);
+  let balance;
+  if(loan.method==='genkin'){
+    balance=Math.max(0,P-Math.round(P/n)*elapsed);
+  }else if(rr===0||loan.manualPay>0){
+    balance=Math.max(0,P-pay.monthly*elapsed);
+  }else{
+    balance=Math.max(0,Math.round(P*Math.pow(1+rr,elapsed)-pay.monthly*(Math.pow(1+rr,elapsed)-1)/rr));
+  }
+  // 当月返済額
+  let curPay=0;
+  if(elapsed>=1&&elapsed<=n){
+    if(loan.method==='genkin'&&!(loan.manualPay>0)){
+      const base=Math.round(P/n);
+      curPay=base+Math.round((P-base*(elapsed-1))*rr);
+    }else curPay=pay.monthly;
+  }
+  const endTotal=(loan.startY*12+loan.startM-1)+n-1;
+  return{elapsed,balance,curPay,endY:Math.floor(endTotal/12),endM:endTotal%12+1};
+}
+function addLoan(){
+  const title=(document.getElementById('ln-title')?.value||'').trim();
+  const principal=parseInt(document.getElementById('ln-principal')?.value,10)||0;
+  const rate=parseFloat(document.getElementById('ln-rate')?.value)||0;
+  const months=parseInt(document.getElementById('ln-months')?.value,10)||0;
+  const method=document.getElementById('ln-method')?.value||'ganri';
+  const start=(document.getElementById('ln-start')?.value||'').trim();
+  const manualPay=parseInt(document.getElementById('ln-manual')?.value,10)||0;
+  if(!title){showBanner('タイトル（借入先）を入力してください','err');return;}
+  if(principal<=0){showBanner('借入額を入力してください','err');return;}
+  if(months<=0){showBanner('返済回数を入力してください','err');return;}
+  const sm=start.match(/^(\d{4})-(\d{2})$/);
+  if(!sm){showBanner('返済開始月を選択してください','err');return;}
+  state.loans.push({id:'ln_'+Date.now(),title,principal,rate,months,method,startY:parseInt(sm[1],10),startM:parseInt(sm[2],10),manualPay});
+  save();
+  ['ln-title','ln-principal','ln-rate','ln-months','ln-start','ln-manual'].forEach(i=>{const el=document.getElementById(i);if(el)el.value='';});
+  showBanner('借入金を登録しました','ok');renderAll();
+}
+window.addLoan=addLoan;
+function deleteLoan(id){
+  if(!confirm('この借入金を削除しますか？'))return;
+  state.loans=state.loans.filter(l=>l.id!==id);
+  save();renderAll();
+}
+window.deleteLoan=deleteLoan;
+
+function addCreditCard(){
+  const name=(document.getElementById('cc-name')?.value||'').trim();
+  const closing=(document.getElementById('cc-closing')?.value||'').trim();
+  const billing=(document.getElementById('cc-billing')?.value||'').trim();
+  const limit=parseInt(document.getElementById('cc-limit')?.value,10)||0;
+  if(!name){showBanner('クレカ名を入力してください','err');return;}
+  state.creditCards.push({id:'cc_'+Date.now(),name,closing,billing,limit});
+  save();
+  ['cc-name','cc-closing','cc-billing','cc-limit'].forEach(i=>{const el=document.getElementById(i);if(el)el.value='';});
+  showBanner('クレジットカードを登録しました','ok');renderAll();
+}
+window.addCreditCard=addCreditCard;
+function deleteCreditCard(id){
+  if(!confirm('このカードを削除しますか？'))return;
+  state.creditCards=state.creditCards.filter(cc=>cc.id!==id);
+  save();renderAll();
+}
+window.deleteCreditCard=deleteCreditCard;
+
+function toggleInvMall(key,checked){
+  state._invMallSel=state._invMallSel||{};
+  if(checked)state._invMallSel[key]=1;else delete state._invMallSel[key];
+  renderAll();
+}
+window.toggleInvMall=toggleInvMall;
 
 // Extract last 6 digits from SKU for sorting
 function skuTailNum(sku){
@@ -2036,6 +2432,8 @@ function renderInvTable(finalInv){
   if(sq)r=r.filter(i=>(i.sku||'').toLowerCase().includes(sq)||(i.name||'').toLowerCase().includes(sq)||(i.maker||'').toLowerCase().includes(sq));
   if(pf==='unlisted')r=r.filter(i=>i.isUnlisted);else if(pf==='pending')r=r.filter(i=>i.isPending);else if(pf==='returns')r=r.filter(i=>i.rQty>0);else if(pf!=='all')r=r.filter(i=>i.platforms.includes(pf));
   if(invMulti)r=r.filter(i=>i.platforms.length>1);
+  const _mallSel=Object.keys(state._invMallSel||{});
+  if(_mallSel.length>0)r=r.filter(i=>_mallSel.every(k=>i.platforms.includes(k)));
   const ageMin=parseInt(document.getElementById('inv-age')?.value||'0',10);
   if(ageMin>0)r=r.filter(i=>i.ageDays>=ageMin);
 
@@ -2223,6 +2621,145 @@ async function handleReturnsCSV(input){
   renderAll();
 }
 window.handleReturnsCSV=handleReturnsCSV;
+
+// ═══ Amazon補填（返金レポート）═══
+function _reimbNorm(s){return String(s||'').trim().replace(/-1$/,'');}
+function _reimbTail(s){const b=_reimbNorm(s);return b.length>=6?b.slice(-6):b;}
+// ヤフオクストア高単価手数料: 達成時は5万まで通常料率・超過分は軽減料率
+function calcAucStoreFee(sales,hpActive){
+  const comm=state.auction_fees.commission/100, pr=state.auction_fees.pr_ad/100;
+  const th=state.auction_fees.high_price_threshold||50000, hp=state.auction_fees.high_price_rate/100;
+  if(hpActive&&sales>=th) return Math.round(th*comm+(sales-th)*hp+sales*pr);
+  return Math.round(sales*(comm+pr));
+}
+// 達成目標判定: 対象額以上の商品の販売価格合計 >= 達成目標（目標0なら常に適用）
+function calcAucHpActive(rowsArr){
+  const th=state.auction_fees.high_price_threshold||50000;
+  const target=state.auction_fees.high_price_target||0;
+  if(target<=0)return true;
+  let sum=0;
+  rowsArr.forEach(r2=>{
+    if(r2._isRefund)return;
+    const gp=(r2['GetPointFixDate']||'').trim();if(gp)return;
+    const s=(parseInt((r2['UnitPrice']||'0').replace(/[,]/g,''),10)||0)*(parseInt(r2['Quantity']||'0',10)||0);
+    if(s>=th)sum+=s;
+  });
+  return sum>=target;
+}
+function _colorRuleNote(){
+  const norm=(state.colorConfig&&state.colorConfig.normal)||{};
+  const titles=(state.colorConfig&&state.colorConfig.titles)||{};
+  const det=state._detectedColors||{};
+  const chip=(k,label)=>{const ck=COLOR_KEYS[k]||{name:k,swatch:'#eee'};const dark=(k==='black'||k==='darkgray');return `<span style="background:${ck.swatch};${dark?'color:#fff;':''}border:1px solid #ddd;padding:2px 6px;border-radius:4px;margin:0 2px">${label||ck.name}</span>`;};
+  const normKeys=Object.keys(norm).filter(k=>norm[k]&&(k==='white'||det[k]));
+  const listedPart=normKeys.length?normKeys.map(k=>chip(k)).join(''):chip('white');
+  const restKeys=Object.keys(det).filter(k=>det[k]&&!norm[k]);
+  const unlPart=restKeys.map(k=>{const t=titles[k];const ck=COLOR_KEYS[k]||{name:k};return chip(k,t?(ck.name+'='+t):undefined);}).join('');
+  return `🔒 <strong>判定ルール（色分類設定に連動）:</strong> ${listedPart}= 出品後在庫（販路CSVと照合して棚卸判定） / ${unlPart||'（色付きの行）'}= 未出品在庫としてすべて棚卸に計上`;
+}
+function isReimbursedSku(sku){
+  const m=state.reimbursedSkus||{};if(!sku)return false;
+  const b=_reimbNorm(sku);
+  return !!(m[b]||m[_reimbTail(b)]);
+}
+function _reimbMonth(y,m){
+  const items=(state.reimbursements||[]).filter(rr=>{const d=String(rr.date||'');return parseInt(d.slice(0,4),10)===y&&parseInt(d.slice(5,7),10)===m;});
+  let amt=0,cost=0,profit=0;
+  items.forEach(rr=>{amt+=rr.amount||0;const c2=rr.linked?(rr.cost||0):0;cost+=c2;profit+=(rr.amount||0)-c2;});
+  return{amt:Math.round(amt),cost:Math.round(cost),profit:Math.round(profit),items};
+}
+function _reimbRecalcLinks(){
+  const groups={};
+  (state.reimbursements||[]).forEach(rr=>{const b=_reimbNorm(rr.sku);(groups[b]=groups[b]||[]).push(rr);});
+  Object.values(groups).forEach(list=>{
+    list.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+    list.forEach((rr,i)=>{rr.linked=(i===0);});
+  });
+}
+async function handleReimbCSV(input){
+  const file=input.files?.[0];if(!file)return;
+  let text;
+  try{const buf=await file.arrayBuffer();text=new TextDecoder('utf-8').decode(buf);const g=(text.match(/\ufffd/g)||[]).length;if(g>5)text=new TextDecoder('shift_jis').decode(buf);}catch{text=await file.text();}
+  const data=parseCSV(text);
+  if(!data.length){showBanner('CSVにデータがありません','err');return;}
+  const pick=(row,keys)=>{for(const k of keys){if(row[k]!==undefined&&String(row[k]).trim()!=='')return String(row[k]).trim();}return '';};
+  // 仕入金額の紐づけマップ（products + 仕入ログ）
+  const costExact={},costTail={};
+  const addCost=(s,co)=>{if(!s||!co)return;const b=_reimbNorm(s);if(costExact[b]===undefined)costExact[b]=co;const t=_reimbTail(b);if(costTail[t]===undefined)costTail[t]=co;};
+  state.products.forEach(p=>addCost(p.sku,p.cost||0));
+  (state.purchaseLog||[]).forEach(p=>addCost(p._sku||p.sku,p.cost||0));
+  const lookupCost=s=>{const b=_reimbNorm(s);if(costExact[b]!==undefined)return costExact[b];const t=_reimbTail(b);return costTail[t]!==undefined?costTail[t]:0;};
+  const existingIds=new Set((state.reimbursements||[]).map(rr=>String(rr.id)));
+  let added=0,dup=0;
+  data.forEach(row=>{
+    const id=pick(row,['返金 ID','返金ID','reimbursement-id']);
+    const sku=pick(row,['sku','SKU','出品者SKU']);
+    if(!id||!sku)return;
+    if(existingIds.has(id)){dup++;return;}
+    existingIds.add(id);
+    const amount=Math.round(parseFloat(pick(row,['合計返金額','amount-total','商品あたりの返金額']).replace(/,/g,''))||0);
+    state.reimbursements.push({
+      id,sku,date:pick(row,['承認日','approval-date']).slice(0,10),
+      name:pick(row,['商品名','product-name']),
+      amount,qty:parseInt(pick(row,['数量','quantity']),10)||1,
+      reason:pick(row,['理由','reason']),
+      orderId:pick(row,['Amazon注文番号','amazon-order-id']),
+      cost:lookupCost(sku)
+    });
+    state.reimbursedSkus[_reimbNorm(sku)]=1;
+    added++;
+  });
+  _reimbRecalcLinks();
+  // 棚卸（products/unlisted）から該当SKUを削除（恒久除外は同期時にも適用）
+  const beforeP=state.products.length,beforeU=(state.unlisted||[]).length;
+  state.products=state.products.filter(p=>!isReimbursedSku(p.sku));
+  state.unlisted=(state.unlisted||[]).filter(u=>!isReimbursedSku(u.sku));
+  const remInv=(beforeP-state.products.length)+(beforeU-(state.unlisted||[]).length);
+  // 販売済（プライスター売上）から該当SKU行を削除（返金レポート優先）
+  const beforeS=state.sales_priceter.length;
+  state.sales_priceter=state.sales_priceter.filter(rr=>!isReimbursedSku(rr['SKU']));
+  const remSales=beforeS-state.sales_priceter.length;
+  state.lastUpload={...state.lastUpload,reimb:new Date().toISOString()};
+  save();
+  showBanner('補填CSV取込: 新規'+added+'件（重複'+dup+'件除外）'+(remInv>0?' / 棚卸から'+remInv+'件削除':'')+(remSales>0?' / 販売済から'+remSales+'件削除':''),'ok');
+  input.value='';
+  renderAll();
+}
+window.handleReimbCSV=handleReimbCSV;
+function clearReimb(){
+  if(!confirm('補填データを全て削除しますか？（棚卸からの除外も解除され、次回同期で商品が復元されます）'))return;
+  state.reimbursements=[];state.reimbursedSkus={};
+  save();showBanner('補填データを削除しました','ok');renderAll();
+}
+window.clearReimb=clearReimb;
+
+// ═══ バックアップ / 復元 ═══
+function exportBackup(){
+  const data={};
+  Object.keys(state).forEach(k=>{if(!k.startsWith('_'))data[k]=state[k];});
+  const blob=new Blob([JSON.stringify({_backup:1,_date:new Date().toISOString(),data})],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  const d=new Date();
+  a.download='在庫マネージャー_バックアップ_'+d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')+'.json';
+  a.click();
+  showBanner('バックアップをダウンロードしました','ok');
+}
+window.exportBackup=exportBackup;
+async function importBackup(input){
+  const file=input.files?.[0];if(!file)return;
+  if(!confirm('バックアップから復元しますか？現在のデータは上書きされます'))return;
+  try{
+    const obj=JSON.parse(await file.text());
+    if(!obj._backup||!obj.data)throw new Error('形式不正');
+    Object.keys(obj.data).forEach(k=>{state[k]=obj.data[k];});
+    save();
+    showBanner('バックアップ（'+(obj._date||'').slice(0,10)+'）から復元しました','ok');
+    renderAll();
+  }catch(e){showBanner('復元に失敗しました: '+e.message,'err');}
+  input.value='';
+}
+window.importBackup=importBackup;
 
 // メルカリ注文データCSV (merge multiple)
 async function handleMercariOrderUpload(input){
@@ -2423,8 +2960,8 @@ window.addManualSale=addManualSale;
 
 // ── Monthly Data Save/Edit/Delete ──
 function saveMonthlyData(){
-  const year=parseInt(document.getElementById('save-year')?.value)||new Date().getFullYear();
-  const month=parseInt(document.getElementById('save-month')?.value)||new Date().getMonth()+1;
+  const year=state.selectedYear||new Date().getFullYear();
+  const month=state.selectedMonth||new Date().getMonth()+1;
   // Check if already exists
   const existing=state.monthlyData.find(d=>d.year===year&&d.month===month);
   if(existing&&!confirm(`${year}年${month}月のデータは既に保存されています。上書きしますか？`))return;
@@ -2437,9 +2974,16 @@ function saveMonthlyData(){
   state.sales_priceter.forEach(r=>{const pr=parseInt((r['出品価格']||'0').replace(/[,]/g,''),10)||0;const q2=parseInt(r['売れた個数']||'1',10)||1;const c=parseInt((r['仕入れ価格']||'0').replace(/[,]/g,''),10)||0;const f=Math.abs(parseFloat((r['Amazon手数料']||'0').replace(/[,]/g,'')))||0;const ref=parseFloat((r['返金総額']||'0').replace(/[,]/g,''))||0;const shp5=parseInt(r['_ship'],10)||0;const rp0b=parseFloat((r['粗利益']||'0').replace(/[,]/g,''))||0;const rp=(r['_profitOverride']!==undefined)?r['_profitOverride']:rp0b-shp5;const hr=ref<0;const s=pr*q2;if(!hr){fees+=shp5;sales+=s;cost+=c*q2;qty+=q2;profit+=rp;addPl('プライスター',s,f+shp5,rp,q2,c*q2);}else{refund+=Math.abs(ref);if(!plat['プライスター'])plat['プライスター']={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat['プライスター'].refund+=Math.abs(ref);plat['プライスター'].refundCount++;addPl('プライスター',0,f,0,0,0);}fees+=f;});
   state.sales_mercari.forEach(r=>{const s=parseInt((r['売上（税込）']||'0').replace(/[,]/g,''),10)||0;const shp6=parseInt(r['_ship'],10)||0;const f=parseInt((r['販売手数料（税込）']||'0').replace(/[,]/g,''),10)||0;const q2=parseInt(r['数量']||'1',10)||1;const oid=(r['注文番号']||'').trim();const sku=moSKU[oid]||'';const bc=sku?cm[sku]||0:0;const c2=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const hr=!!r._isRefund;if(!hr){fees+=shp6;profit-=shp6;sales+=s;cost+=c2*q2;qty+=q2;const p2=s-f-c2*q2;profit+=p2;addPl('メルカリShops',s,f,p2,q2,c2*q2);}else{if(!plat['メルカリShops'])plat['メルカリShops']={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat['メルカリShops'].refund+=s;plat['メルカリShops'].refundCount++;plat['メルカリShops'].refundFee+=f;profit-=f;fees+=f;addPl('メルカリShops',0,0,0,0,0);return;}fees+=f;});
   const yC=state.yahoo_fees.commission/100+state.yahoo_fees.pr_ad/100;const aC=state.auction_fees.commission/100+state.auction_fees.pr_ad/100;
-  state.sales_yahoo.forEach(r=>{const q2=parseInt(r['Quantity']||'0',10)||0;if(!q2)return;const shp7=parseInt(r['_ship'],10)||0;const pr=parseInt((r['UnitPrice']||'0').replace(/[,]/g,''),10)||0;const gp=(r['GetPointFixDate']||'').trim();const iid=(r['ItemId']||'').trim();const bc=cm[iid]||0;const c2=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const s=pr*q2;const f=Math.round(s*(gp?yC:aC));const hr=!!r._isRefund;const plName=gp?'Yahoo!ショッピング':'ヤフオクストア';if(!hr){fees+=shp7;profit-=shp7;sales+=s;cost+=c2*q2;qty+=q2;const p2=s-c2*q2-f;profit+=p2;addPl(plName,s,f,p2,q2,c2*q2);}else{if(!plat[plName])plat[plName]={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat[plName].refund+=s;plat[plName].refundCount++;plat[plName].refundFee+=f;profit-=f;fees+=f;addPl(plName,0,0,0,0,0);return;}fees+=f;});
-  state.sales_yafuoku.forEach(r=>{const st=(r['状態']||'').trim();const _n0=v=>{if(!v||String(v).trim()==='-')return 0;return parseInt(String(v).replace(/[,¥]/g,''),10)||0;};const afRaw2=(r['Yahoo!オークション 落札システム利用料']||'').toString().trim();const isAuc4=afRaw2!==''&&afRaw2!=='-';const _yde=(isAuc4&&!String(r['決済ID']||'').startsWith('manual_'))?(parseInt(state.yafuoku_ship_deduct,10)||0):0;const s=(r['_salesOverride']!==undefined)?r['_salesOverride']:Math.max(0,_n0(r['落札者/購入者の支払金額'])-_yde);const af=_n0(r['Yahoo!オークション 落札システム利用料']);const ff=_n0(r['Yahoo!フリマ 販売手数料']);const sh=_n0(r['送料']);const f=(isAuc4?af:ff)+sh;const plName=isAuc4?'ヤフオク':'Yahoo!フリマ';if(st==='キャンセル'){if(!plat[plName])plat[plName]={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat[plName].refund+=s;plat[plName].refundCount++;return;}const sku=(r['SKU']||'').trim();const bc=cm[sku]||0;const c2=(r['_costOverride']!==undefined)?r['_costOverride']:bc;sales+=s;fees+=f;cost+=c2;qty+=1;const p2=s-f-c2;profit+=p2;addPl(plName,s,f,p2,1,c2);});
+  const _moHpAct=calcAucHpActive(state.sales_yahoo);state.sales_yahoo.forEach(r=>{const q2=parseInt(r['Quantity']||'0',10)||0;if(!q2)return;const shp7=parseInt(r['_ship'],10)||0;const pr=parseInt((r['UnitPrice']||'0').replace(/[,]/g,''),10)||0;const gp=(r['GetPointFixDate']||'').trim();const iid=(r['ItemId']||'').trim();const bc=cm[iid]||0;const c2=(r['_costOverride']!==undefined)?r['_costOverride']:bc;const s=pr*q2;const f=gp?Math.round(s*yC):calcAucStoreFee(s,_moHpAct);const hr=!!r._isRefund;const plName=gp?'Yahoo!ショッピング':'ヤフオクストア';if(!hr){fees+=shp7;profit-=shp7;sales+=s;cost+=c2*q2;qty+=q2;const p2=s-c2*q2-f;profit+=p2;addPl(plName,s,f,p2,q2,c2*q2);}else{if(!plat[plName])plat[plName]={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat[plName].refund+=s;plat[plName].refundCount++;plat[plName].refundFee+=f;profit-=f;fees+=f;addPl(plName,0,0,0,0,0);return;}fees+=f;});
+  state.sales_yafuoku.forEach(r=>{const st=(r['状態']||'').trim();const _n0=v=>{if(!v||String(v).trim()==='-')return 0;return parseInt(String(v).replace(/[,¥]/g,''),10)||0;};const afRaw2=(r['Yahoo!オークション 落札システム利用料']||'').toString().trim();const isAuc4=afRaw2!==''&&afRaw2!=='-';const _yde=(isAuc4&&!String(r['決済ID']||'').startsWith('manual_'))?(parseInt(state.yafuoku_ship_deduct,10)||0):0;const s=(r['_salesOverride']!==undefined)?r['_salesOverride']:Math.max(0,_n0(r['落札者/購入者の支払金額'])-_yde);const af=_n0(r['Yahoo!オークション 落札システム利用料']);const ff=_n0(r['Yahoo!フリマ 販売手数料']);const _rv=_n0(r['受取金額']);const _rp2=_n0(r['落札者/購入者の支払金額']);const sh=(r['_shipOverride']!==undefined)?r['_shipOverride']:(_rv>0?Math.max(0,_rp2-(isAuc4?af:ff)-_rv):_n0(r['送料']));const f=(isAuc4?af:ff)+sh;const plName=isAuc4?'ヤフオク':'Yahoo!フリマ';if(st==='キャンセル'){if(!plat[plName])plat[plName]={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat[plName].refund+=s;plat[plName].refundCount++;return;}const sku=(r['SKU']||'').trim();const bc=cm[sku]||0;const c2=(r['_costOverride']!==undefined)?r['_costOverride']:bc;sales+=s;fees+=f;cost+=c2;qty+=1;const p2=s-f-c2;profit+=p2;addPl(plName,s,f,p2,1,c2);});
   [[state.sales_mercari_direct,'メルカリ'],[state.sales_rakuma,'ラクマ']].forEach(([arr,plName])=>{arr.forEach(r=>{const hr=!!r._isRefund;const s=parseInt(r['売上']||'0',10)||0;const q2=parseInt(r['数量']||'1',10)||1;const f=parseInt(r['手数料']||'0',10)||0;const sh8=parseInt(r['送料']||'0',10)||0;const co=parseInt(r['仕入']||'0',10)||0;if(!hr){sales+=s;cost+=co*q2;qty+=q2;const p2=(r['_profitOverride']!==undefined)?r['_profitOverride']:s-f-sh8-co*q2;profit+=p2;fees+=f+sh8;addPl(plName,s,f+sh8,p2,q2,co*q2);}else{if(!plat[plName])plat[plName]={sales:0,fees:0,profit:0,qty:0,cost:0,refund:0,refundCount:0,refundFee:0};plat[plName].refund+=s;plat[plName].refundCount++;plat[plName].refundFee+=f;profit-=f;fees+=f;addPl(plName,0,0,0,0,0);}});});
+  // ヤフオクストアのクーポン負担（月次一括）を算入
+  {const _cb2=(state.sales_yahoo.some(r=>!(r['GetPointFixDate']||'').trim()))?(parseInt(state.auction_fees.couponBurden,10)||0):0;
+   if(_cb2>0){fees+=_cb2;profit-=_cb2;
+     if(plat['ヤフオクストア']){plat['ヤフオクストア'].fees+=_cb2;plat['ヤフオクストア'].profit-=_cb2;}
+   }}
+  // Amazon補填（保存対象月）を月次に算入
+  {const _rmMo=_reimbMonth(year,month);if(_rmMo.items.length>0){sales+=_rmMo.amt;cost+=_rmMo.cost;profit+=_rmMo.profit;addPl('Amazon補填',_rmMo.amt,0,_rmMo.profit,0,_rmMo.cost);}}
   // Inventory data
   const {finalInv}=buildInventory();
   const invCount=finalInv.reduce((s,i)=>s+Math.max(i.qty,i.mQty,i.yQty)+(i.rQty||0),0);
@@ -2576,7 +3120,7 @@ window.editMonthlyData=editMonthlyData;
 
 function saveEditedMonth(id){
   const d=state.monthlyData.find(m=>m.id===id);if(!d)return;
-  ['sales','refund','fees','cost','profit','qty','invCount','invCost','purchases'].forEach(k=>{
+  ['sales','refund','fees','cost','profit','qty','invCount','invCost','purchases','purchaseCount'].forEach(k=>{
     const el=document.getElementById('em-'+k);if(el)d[k]=parseInt(el.value)||0;
   });
   d.savedAt=new Date().toISOString();
@@ -2756,7 +3300,7 @@ function startEdit(el,field,idx,dk){
       const isAuc2=dk==='yafuoku';
       if(field==='sales')r['_salesOverride']=nv;
       else if(field==='fee'){if(isAuc2)r['Yahoo!オークション 落札システム利用料']=String(nv);else r['Yahoo!フリマ 販売手数料']=String(nv);}
-      else if(field==='ship')r['送料']=nv>0?String(nv):'-';
+      else if(field==='ship')r['_shipOverride']=nv;
       else if(field==='cost')r['_costOverride']=nv;
       else if(field==='profit')r['_profitOverride']=nv;
     }else if(dk==='mercari_direct'||dk==='rakuma'){
@@ -3234,6 +3778,7 @@ async function doSync(){
           if(!_isNorm) e._colorStatus=colorStatusLabel(cellColor);
         }
         if(sku){
+          if(isReimbursedSku(sku))return; // Amazon補填済み（商品は戻らない）→棚卸対象外
           if(!_isNorm&&e._colorStatus){
             // SKU有+未出品扱いの色 → 未出品在庫（SKU表示付き）
             e.sku=sku;
@@ -3245,7 +3790,7 @@ async function doSync(){
         } else if(e.name){
           // SKU無+出品後在庫の色 → 警告（データには取り込まない）/ SKU無+その他の色 → 未出品在庫
           if(cellColor&&isNormalColor(cellColor)){
-            _noSkuWarn.push({name:e.name,date:e.date||'',supplier:e.supplier||'',source:sh.name||'',colorKey:classifyColorKey(cellColor)});
+            _noSkuWarn.push({name:e.name,date:e.date||'',supplier:e.supplier||'',source:sh.name||'',colorKey:classifyColorKey(cellColor),row:(e.no||String(idx+2)),_rawSku:sku||''});
             return;
           }
           if(!e._colorStatus&&cellColor&&!isNormalColor(cellColor))e._colorStatus=colorStatusLabel(cellColor);
@@ -3472,10 +4017,13 @@ renderAll();
         save();
         return;
       }
-      const keys=['products','unlisted','removed','amazon_fba','amazon_self','mercari','mercariFiles','yahoo','returns','nai','lastSync','lastUpload','sheets','gasUrl','gasToken','sales_priceter','sales_mercari','sales_yahoo','mercari_orders','yahoo_fees','auction_fees','pendingShip','_manualPending','monthlyData','purchaseLog','selectedYear','selectedMonth','removedPending','sales_yafuoku','sales_mercari_direct','sales_rakuma','colorConfig','openingInv','yafuoku_ship_deduct'];
+      const keys=['products','unlisted','removed','amazon_fba','amazon_self','mercari','mercariFiles','yahoo','returns','nai','lastSync','lastUpload','sheets','gasUrl','gasToken','sales_priceter','sales_mercari','sales_yahoo','mercari_orders','yahoo_fees','auction_fees','pendingShip','_manualPending','monthlyData','purchaseLog','selectedYear','selectedMonth','removedPending','sales_yafuoku','sales_mercari_direct','sales_rakuma','colorConfig','openingInv','yafuoku_ship_deduct','reimbursements','reimbursedSkus','expenses','creditCards','loans','expenseAccounts'];
       let changed=false;
+      // クラウドに実データがあることを記録（空上書きガード用）
+      if(((fbData.products||[]).length+(fbData.sales_priceter||[]).length+(fbData.purchaseLog||[]).length)>0)SS('inv_cloud_had_data',1);
       if(fbTime>localTime){state._lastModified=fbTime;SS('inv_last_modified',fbTime);}
       keys.forEach(k=>{if(fbData[k]!==undefined&&JSON.stringify(state[k])!==JSON.stringify(fbData[k])){state[k]=fbData[k];changed=true;}});
+      migrateExpAccounts(); // クラウドの旧科目リストで上書きされた場合も再移行
       ['products','unlisted','removed','amazon_fba','amazon_self','mercari','yahoo','returns','sales_priceter','sales_mercari','sales_yahoo','mercari_orders','monthlyData','purchaseLog','_manualPending','sales_yafuoku','sales_mercari_direct','sales_rakuma'].forEach(k=>{if(!Array.isArray(state[k]))state[k]=[];});
 if(!state.colorConfig||typeof state.colorConfig!=='object')state.colorConfig={normal:{white:1},titles:{}};
 if(!state.colorConfig.titles)state.colorConfig.titles={};

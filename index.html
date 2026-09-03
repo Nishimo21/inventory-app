@@ -745,7 +745,7 @@ function renderAll() {
   const pna=nonAmz.filter(i=>!i.included).length;
 
   // Current month purchases for dashboard - use saved selection
-  function _parseYM(ds){if(!ds)return null;const s=String(ds).trim();let m=s.match(/(\d{4})[\/\-](\d{1,2})/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2})\s+(\d{4})/i);if(m){const mo={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};return{y:parseInt(m[3]),m:mo[m[1].slice(0,3).toLowerCase()]};}const d=new Date(s);if(!isNaN(d.getTime()))return{y:d.getFullYear(),m:d.getMonth()+1};return null;}
+  function _parseYM(ds){if(!ds)return null;const s=String(ds).trim();let m=s.match(/(\d{4})[\/\-](\d{1,2})/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/(\d{4})年\s*(\d{1,2})月/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/^(\d{4})(\d{2})(\d{2})$/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2})\s+(\d{4})/i);if(m){const mo={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};return{y:parseInt(m[3]),m:mo[m[1].slice(0,3).toLowerCase()]};}const d=new Date(s);if(!isNaN(d.getTime()))return{y:d.getFullYear(),m:d.getMonth()+1};return null;}
   const curY=state.selectedYear,curM=state.selectedMonth;
   let curPurchases=0,curPurchaseCount=0;
   const pLog=state.purchaseLog||[];
@@ -1021,7 +1021,7 @@ function doGet(e) {
             html+=`<div style="padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--sky);margin-bottom:10px;margin-top:-6px">`;
             // Header row setting
             html+=`<div class="flex" style="margin-bottom:12px;gap:12px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:700;color:var(--blue-deep)">ヘッダー行</label><input type="number" value="${sh.headerRow||1}" min="1" style="width:80px;padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px" onchange="updateSheetHeaderRow('${sh._id}',this.value)"><label style="font-size:12px;font-weight:700;color:var(--blue-deep)">最大行数</label><input type="number" value="${sh.maxRows||''}" min="0" placeholder="無制限" style="width:110px;padding:6px 8px;font-size:13px;border:1px solid var(--line);border-radius:8px" onchange="updateSheetMaxRows('${sh._id}',this.value)"><span style="font-size:11px;color:var(--muted)">変更すると自動で再取得されます</span></div>`;
-            html+=`<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px">${p.headers.length}列・${p.rows.length}行${cm.sku!==undefined?` — <span style="color:var(--blue-deep)">SKU有: ${wSKU}</span>${woSKU>0?` <span style="color:var(--purple)">SKUなし: ${woSKU}</span>`:''}`:''}` + '</div>';
+            html+=`<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px">${p.headers.length}列・${p.rows.length}行${cm.sku!==undefined?` — <span style="color:var(--blue-deep)">SKU有: ${wSKU}</span>${woSKU>0?` <span style="color:var(--purple)">SKUなし: ${woSKU}</span> ・ <span style="color:var(--blue-deep)">仕入ログ: ${(state.purchaseLog||[]).filter(pr=>pr.source===sh.name).length}件</span>`:''}`:''}` + '</div>';
             html+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:10px">`;
             FIELDS.forEach(f=>{
               html+=`<div><label style="font-size:10px;font-weight:700;color:${f.req?'var(--blue-deep)':'var(--muted)'};display:block;margin-bottom:3px">${f.label}${f.req?' *':''}</label>`;
@@ -2173,12 +2173,12 @@ ${state._expAccOpen?`<div style="display:grid;grid-template-columns:repeat(auto-
       html+=`<div class="flex" style="gap:8px;margin-top:12px"><button class="btn ghost" onclick="editMonthlyData('${viewD.id}')">✏ 編集</button><button class="btn danger" onclick="deleteMonthlyData('${viewD.id}')">🗑 削除</button></div>`;
     } else {
       // Monthly trend table
-      html+=`<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>年月</th><th>売上</th><th>返金</th><th>手数料</th><th>仕入原価</th><th>利益</th><th>利益率</th><th>入金額</th><th>棚卸数</th><th>棚卸原価</th><th>仕入額</th><th>操作</th></tr></thead><tbody>`;
+      html+=`<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>年月</th><th>売上</th><th>返金</th><th>手数料</th><th>仕入原価</th><th>利益</th><th>利益率</th><th>入金額</th><th>棚卸数</th><th>棚卸原価</th><th>仕入額</th><th>経常利益<div style='font-size:9px;font-weight:400'>利益−経費−利息</div></th><th>資金残<div style='font-size:9px;font-weight:400'>−返済全額(元金含む)</div></th><th>操作</th></tr></thead><tbody>`;
       sorted.forEach((d,idx)=>{
         const prev=sorted[idx+1];const deposit=d.sales-d.fees;
         const margin=d.sales>0?((d.profit/d.sales)*100).toFixed(1):'—';
         const chg=(key)=>{if(!prev)return'';const diff=d[key]-(prev[key]||0);return diff>0?`<span style="color:var(--ok);font-size:10px">▲${Math.abs(diff).toLocaleString()}</span>`:diff<0?`<span style="color:var(--danger);font-size:10px">▼${Math.abs(diff).toLocaleString()}</span>`:'';};
-        html+=`<tr><td style="font-weight:700">${d.year}/${String(d.month).padStart(2,'0')}</td><td>¥${d.sales.toLocaleString()} ${chg('sales')}</td><td style="color:var(--danger)">-¥${d.refund.toLocaleString()}</td><td>¥${d.fees.toLocaleString()}</td><td>¥${d.cost.toLocaleString()}</td><td style="font-weight:700;color:${d.profit>=0?'var(--ok)':'var(--danger)'}">¥${d.profit.toLocaleString()} ${chg('profit')}</td><td>${margin}%</td><td style="color:var(--blue-deep)">¥${deposit.toLocaleString()}</td><td>${d.invCount}点 ${chg('invCount')}</td><td>¥${d.invCost.toLocaleString()}</td><td>¥${d.purchases.toLocaleString()}</td><td style="white-space:nowrap"><button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="state._viewMonth='${d.id}';renderAll()">詳細</button> <button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="editMonthlyData('${d.id}')">編集</button> <button class="btn danger" style="padding:3px 8px;font-size:11px" onclick="deleteMonthlyData('${d.id}')">削除</button></td></tr>`;
+        html+=`<tr><td style="font-weight:700">${d.year}/${String(d.month).padStart(2,'0')}</td><td>¥${d.sales.toLocaleString()} ${chg('sales')}</td><td style="color:var(--danger)">-¥${d.refund.toLocaleString()}</td><td>¥${d.fees.toLocaleString()}</td><td>¥${d.cost.toLocaleString()}</td><td style="font-weight:700;color:${d.profit>=0?'var(--ok)':'var(--danger)'}">¥${d.profit.toLocaleString()} ${chg('profit')}</td><td>${margin}%</td><td style="color:var(--blue-deep)">¥${deposit.toLocaleString()}</td><td>${d.invCount}点 ${chg('invCount')}</td><td>¥${d.invCost.toLocaleString()}</td><td>¥${d.purchases.toLocaleString()}</td>${(()=>{const op=(d.opProfit!==undefined)?d.opProfit:((d.profit||0)-_expCompAt(d.year,d.month));const od=(d.ordProfit!==undefined)?d.ordProfit:(op-_loanInterestAt(d.year,d.month));const cash=(d.cashProfit!==undefined)?d.cashProfit:(op-_loanPayAt(d.year,d.month));return `<td style="font-weight:700;color:${od>=0?'var(--ok)':'var(--danger)'}">¥${od.toLocaleString()}</td><td style="font-weight:700;color:${cash>=0?'var(--blue-deep)':'var(--danger)'}">¥${cash.toLocaleString()}</td>`;})()}<td style="white-space:nowrap"><button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="state._viewMonth='${d.id}';renderAll()">詳細</button> <button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="editMonthlyData('${d.id}')">編集</button> <button class="btn danger" style="padding:3px 8px;font-size:11px" onclick="deleteMonthlyData('${d.id}')">削除</button></td></tr>`;
       });
       html+=`</tbody></table></div>`;
       // Simple bar chart
@@ -2351,6 +2351,36 @@ function calcLoanStatus(loan){
   }
   const endTotal=(loan.startY*12+loan.startM-1)+n-1;
   return{elapsed,balance,curPay,endY:Math.floor(endTotal/12),endM:endTotal%12+1};
+}
+// 実質利益用: 任意の年月の経費（会社負担）合計・借入返済合計
+function _expCompAt(y,m){
+  const sumCo=a=>(a||[]).reduce((s,e)=>s+Math.round((e.amount||0)*((e.ratio===undefined?100:e.ratio)/100)),0);
+  const mk=y+'-'+m;
+  const mon=(state.expenses&&state.expenses.monthly&&state.expenses.monthly[mk])||{variable:[],other:[]};
+  return sumCo((state.expenses&&state.expenses.fixed)||[])+sumCo(mon.variable)+sumCo(mon.other);
+}
+function _loanPayAt(y,m){
+  let total=0;
+  (state.loans||[]).forEach(l=>{
+    const n=l.months||1,rr=(l.rate||0)/100/12,P=l.principal||0;
+    const k=(y-l.startY)*12+(m-l.startM)+1;
+    if(k<1||k>n)return;
+    if(l.manualPay>0){total+=l.manualPay;return;}
+    if(l.method==='genkin'){const base=Math.round(P/n);total+=base+Math.round((P-base*(k-1))*rr);return;}
+    if(rr===0){total+=Math.round(P/n);return;}
+    total+=Math.round(P*rr*Math.pow(1+rr,n)/(Math.pow(1+rr,n)-1));
+  });
+  return total;
+}
+function _loanInterestAt(y,m){
+  let t=0;(state.loans||[]).forEach(l=>{const n=l.months||1,rr=(l.rate||0)/100/12,P=l.principal||0;
+    const k=(y-l.startY)*12+(m-l.startM)+1;if(k<1||k>n||rr===0)return;
+    let bal;
+    if(l.method==='genkin'){bal=P-Math.round(P/n)*(k-1);}
+    else if(l.manualPay>0){bal=Math.max(0,P-l.manualPay*(k-1));}
+    else{const pay=Math.round(P*rr*Math.pow(1+rr,n)/(Math.pow(1+rr,n)-1));bal=Math.max(0,Math.round(P*Math.pow(1+rr,k-1)-pay*(Math.pow(1+rr,k-1)-1)/rr));}
+    t+=Math.round(bal*rr);});
+  return t;
 }
 function addLoan(){
   const title=(document.getElementById('ln-title')?.value||'').trim();
@@ -2645,6 +2675,21 @@ function calcAucHpActive(rowsArr){
     if(s>=th)sum+=s;
   });
   return sum>=target;
+}
+// 仕入日の表記ゆれ正規化: 年なし(8/2)はシート名の年で補完・和暦風(2026年8月2日)・Excelシリアル値対応
+function _ymOf(ds){if(!ds)return null;const s=String(ds).trim();let m=s.match(/(\d{4})[\/\-](\d{1,2})/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/(\d{4})年\s*(\d{1,2})月/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};m=s.match(/^(\d{4})(\d{2})(\d{2})/);if(m)return{y:parseInt(m[1]),m:parseInt(m[2])};const d=new Date(s);if(!isNaN(d.getTime()))return{y:d.getFullYear(),m:d.getMonth()+1};return null;}
+function _normPurchDate(ds,sheetName){
+  let s=String(ds||'').trim();if(!s)return s;
+  if(/^\d{5}$/.test(s)){const d=new Date(Date.UTC(1899,11,30)+parseInt(s,10)*86400000);return d.getUTCFullYear()+'/'+String(d.getUTCMonth()+1).padStart(2,'0')+'/'+String(d.getUTCDate()).padStart(2,'0');}
+  let m=s.match(/^(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})?/);
+  if(m)return m[1]+'/'+String(m[2]).padStart(2,'0')+'/'+String(m[3]||1).padStart(2,'0');
+  m=s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if(m)return m[1]+'/'+m[2]+'/'+m[3]; // 20260901形式
+  if(/\d{4}/.test(s))return s; // 年ありはそのまま（既存パースで処理可能）
+  const fy=(String(sheetName||'').match(/(20\d{2})/)||[])[1]||String(new Date().getFullYear());
+  m=s.match(/^(\d{1,2})[\/\-月]\s*(\d{1,2})/);
+  if(m)return fy+'/'+String(m[1]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0');
+  return s;
 }
 function _colorRuleNote(){
   const norm=(state.colorConfig&&state.colorConfig.normal)||{};
@@ -2964,6 +3009,21 @@ function saveMonthlyData(){
   const month=state.selectedMonth||new Date().getMonth()+1;
   // Check if already exists
   const existing=state.monthlyData.find(d=>d.year===year&&d.month===month);
+  // CSVの販売月と保存対象月のズレ検知（誤上書き防止）
+  {
+    const cnt={};let total=0;
+    const pick=r=>{for(const k of ['注文日','購入日時','購入日','取扱日','LeadTimeStart','販売日時','注文日時']){if(r[k]&&String(r[k]).trim())return r[k];}return '';};
+    [...(state.sales_priceter||[]),...(state.sales_mercari||[]),...(state.sales_yahoo||[]),...(state.sales_yafuoku||[]),...(state.sales_mercari_direct||[]),...(state.sales_rakuma||[])].forEach(r=>{
+      const ym=_ymOf(pick(r));if(!ym)return;const k=ym.y+'-'+ym.m;cnt[k]=(cnt[k]||0)+1;total++;
+    });
+    let domK=null;Object.keys(cnt).forEach(k=>{if(!domK||cnt[k]>cnt[domK])domK=k;});
+    if(domK&&total>=5&&cnt[domK]>=total*0.5){
+      const [dy,dm]=domK.split('-').map(Number);
+      if(dy!==year||dm!==month){
+        if(!confirm(`⚠ アップロード中の売上データは主に ${dy}年${dm}月分 です（${cnt[domK]}件/${total}件）。\nこのまま ${year}年${month}月 として保存すると${existing?`、保存済みの${year}年${month}月のデータがこの内容で上書きされ、元のデータは失われます`:'、月がずれた内容で保存されます'}。\n\n本当に続行しますか？`))return;
+      }
+    }
+  }
   if(existing&&!confirm(`${year}年${month}月のデータは既に保存されています。上書きしますか？`))return;
   // Calculate current sales data (reuse dashboard logic)
   const cm={};state.products.forEach(p=>{if(p.sku)cm[p.sku]=p.cost||0;});
@@ -3062,7 +3122,10 @@ function saveMonthlyData(){
   entry._hasDetail=true;
   if(existing){const idx=state.monthlyData.indexOf(existing);state.monthlyData[idx]=entry;}
   else state.monthlyData.push(entry);
-  save();showBanner(`${year}年${month}月を保存（売上${sItems.length}件 / 仕入${pItems.length}件 / 棚卸${iItems.length}件）`,'ok');renderAll();
+  save();(function(){const e2=state.monthlyData.find(m2=>m2.year===year&&m2.month===month);if(e2){e2.expComp=_expCompAt(year,month);e2.loanInterest=_loanInterestAt(year,month);e2.loanPay=_loanPayAt(year,month);e2.opProfit=(e2.profit||0)-e2.expComp;e2.ordProfit=e2.opProfit-e2.loanInterest;e2.loanPay=_loanPayAt(year,month);e2.cashProfit=e2.opProfit-e2.loanPay;e2.cashAfter=e2.opProfit-e2.loanPay;}})();
+  save();
+  try{exportBackup();}catch(e){}
+  showBanner(`${year}年${month}月を保存（売上${sItems.length}件 / 仕入${pItems.length}件 / 棚卸${iItems.length}件）・バックアップも保存しました`,'ok');renderAll();
 }
 window.saveMonthlyData=saveMonthlyData;
 
@@ -3756,7 +3819,7 @@ async function doSync(){
         if(cm.name!==undefined) e.name=(row[cm.name]||'').trim();
         if(cm.price!==undefined){const v=parseInt((row[cm.price]||'0').replace(/[,¥￥$\s]/g,''),10);if(v)e.price=v;}
         if(cm.cost!==undefined){const v=parseInt((row[cm.cost]||'0').replace(/[,¥￥$\s]/g,''),10);if(v)e.cost=v;}
-        if(cm.date!==undefined) e.date=(row[cm.date]||'').trim();
+        if(cm.date!==undefined) e.date=_normPurchDate((row[cm.date]||'').trim(), sh.name);
         if(cm.supplier!==undefined) e.supplier=(row[cm.supplier]||'').trim();
         if(cm.maker!==undefined) e.maker=(row[cm.maker]||'').trim();
         if(cm.asin!==undefined) e.asin=(row[cm.asin]||'').trim();

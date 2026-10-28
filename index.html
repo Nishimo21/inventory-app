@@ -52,6 +52,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:#fbfdff}
 .badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;margin-right:4px}
 .badge.amazon_fba{background:#fff7ea;color:#d47b06}.badge.amazon_self{background:#fff7ea;color:#b8860b}.badge.mercari{background:#fff0f3;color:#d0254a}.badge.yahoo{background:#fff0f2;color:#b4152a}.badge.returns{background:#f0eeff;color:#5e3ca8}
 .badge.unlisted{background:var(--purple-bg);color:var(--purple)}.badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.pending{background:#f3f8ff;color:var(--muted)}
+.badge.returns{background:#f0eeff;color:#5e3ca8}.badge.refund_back{background:#fff1e8;color:#c2410c}.badge.manual_add{background:#e8f5e9;color:#2e7d32}.badge.other{background:#f3f3f3;color:#555}
 .notify{padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:12px;border-radius:var(--radius);cursor:pointer;transition:.15s}
 .notify:hover{box-shadow:0 4px 16px rgba(0,0,0,.06)}
 .notify .icon{font-size:20px;flex-shrink:0}.notify .body{flex:1}.notify .title{font-weight:700;font-size:14px}.notify .sub{font-size:12px;color:var(--muted);margin-top:2px}
@@ -1037,6 +1038,17 @@ function badgeHTML(p) {
   return `<span class="badge ${p}">${PL[p]||p}</span>`;
 }
 function uBadge() { return '<span class="badge unlisted">未出品</span>'; }
+// 保存済み明細の販路文字列（例「メルカリShops Yahoo!ショッピング」「キャンセル戻り」「手動追加（手元保管）」）を販路名ごとに分けてバッジで表示する（保存データは読むだけ・書き換えない。既知の販路名以外はそのまま汎用バッジ）
+function _plBadgesHtml(plText){
+  let s=String(plText||'').trim();if(!s)return '';
+  const known=[['未出品','unlisted'],['納品中','pending']];Object.keys(PL).sort((a,b)=>PL[b].length-PL[a].length).forEach(k=>known.push([PL[k],k]));
+  const out=[];let guard=0;
+  while(s&&guard++<40){let hit=null;for(const [label,key] of known){if(s.indexOf(label)===0){hit=[label,key];break;}}
+    if(hit){let label=hit[0];let rest=s.slice(label.length);const m=rest.match(/^（[^）]*）/);if(m){label+=m[0];rest=rest.slice(m[0].length);}out.push(`<span class="badge ${hit[1]}">${esc(label)}</span>`);s=rest.replace(/^\s+/,'');}
+    else{const sp=s.search(/\s/);const tok=sp>0?s.slice(0,sp):s;out.push(`<span class="badge other">${esc(tok)}</span>`);s=s.slice(tok.length).replace(/^\s+/,'');}}
+  return out.join('');
+}
+window._plBadgesHtml=_plBadgesHtml;
 
 // Banner: only for sync completion and errors (dismissible with ×)
 function showBanner(msg, type='info') {
@@ -1593,7 +1605,8 @@ GAS設置後、「＋ 新しいスプレッドシートを追加」に入力：<
       r._diag.forEach(d=>{
         diagHtml+=`<div style="margin-bottom:6px"><strong>${esc(d.name)}</strong> (${d.rowCount}行):<br>`;
         diagHtml+=`colMap: ${Object.entries(d.colMap).map(([k,v])=>`${k}=${v}`).join(', ')}<br>`;
-        diagHtml+=`1行目: ${Object.entries(d.sample).map(([k,v])=>`<span style="color:${v?'var(--ok)':'var(--danger)'}"><b>${k}</b>="${esc(String(v).slice(0,20))}"</span>`).join(' / ')}</div>`;
+        diagHtml+=`1行目: ${Object.entries(d.sample).map(([k,v])=>`<span style="color:${v?'var(--ok)':'var(--danger)'}"><b>${k}</b>="${esc(String(v).slice(0,20))}"</span>`).join(' / ')}<br>`;
+        diagHtml+=`色の読取: ${d.colorCol?(d.colorCount>0||!d.rowCount?`No.列「${esc(d.colorCol)}」の背景色を読取（${d.colorCount}行）`:`<span style="color:var(--danger)">No.列「${esc(d.colorCol)}」を指定していますが色が返っていません（GASが色を返さない旧版の可能性。🔗 初回連携のコードで再デプロイしてください）</span>`):'<span style="color:var(--danger)">No.列が未割当のため色を読んでいません（列割当で No. を指定）</span>'}${d.colorKeys?` → ${Object.entries(d.colorKeys).map(([k,n])=>`${(COLOR_KEYS[k]||{}).name||k}:${n}`).join(' / ')}`:''}${d.maxRows&&d.total>d.maxRows?` <span style="color:var(--danger)">⚠ 最大行数 ${d.maxRows} で打ち切り（シートは ${d.total} 行）。後ろの行は読んでいません</span>`:''}${d._fxBlank?` / 数式の結果がエラー・0の行 ${d._fxBlank} 行は未入力として読み飛ばし`:''}</div>`;
       });
       diagHtml+='</div>';
     }
@@ -3014,7 +3027,7 @@ ${state._expAccOpen?`<div style="display:grid;grid-template-columns:repeat(auto-
             let riF=[...riItems];if(riSearch)riF=riF.filter(i=>(i.sku||'').toLowerCase().includes(riSearch)||(i.name||'').toLowerCase().includes(riSearch));
             html+=`<div class="flex" style="gap:6px;margin-bottom:8px"><input type="search" id="ri-search" placeholder="SKU・商品名で検索" style="min-width:160px"><button class="btn primary" style="padding:5px 10px;font-size:12px" onclick="renderAll()">検索</button><span style="font-size:12px;color:var(--muted);margin-left:auto">${riF.length}件</span></div>`;
             html+=`<div class="table-wrap"><table style="font-size:11px"><thead><tr><th>SKU</th><th>商品名</th><th>在庫数</th><th>仕入価格</th><th>販売価格</th><th>販路</th></tr></thead><tbody>`;
-            riF.slice(0,300).forEach(it=>{html+=`<tr><td style="font-weight:600;color:var(--blue-deep);font-size:10px">${esc(it.sku||'—')}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name||'—')}</td><td>${it.qty||0}</td><td>¥${(it.cost||0).toLocaleString()}</td><td>¥${(it.price||0).toLocaleString()}</td><td style="font-size:10px">${esc(it.pl||'')}</td></tr>`;});
+            riF.slice(0,300).forEach(it=>{html+=`<tr><td style="font-weight:600;color:var(--blue-deep);font-size:10px">${esc(it.sku||'—')}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name||'—')}</td><td>${it.qty||0}</td><td>¥${(it.cost||0).toLocaleString()}</td><td>¥${(it.price||0).toLocaleString()}</td><td style="font-size:10px">${_plBadgesHtml(it.pl)}</td></tr>`;});
             html+=`</tbody></table></div>`;
             html+=`<div class="note" style="margin-top:8px">最新月（${rr.label.split('〜')[1]?.trim()||''}）の棚卸スナップショット</div>`;
           } else html+=`<div class="note">保存済み棚卸明細がありません</div>`;
@@ -3130,7 +3143,7 @@ ${state._expAccOpen?`<div style="display:grid;grid-template-columns:repeat(auto-
           let aiItems=[...savedInv];if(aiSearch)aiItems=aiItems.filter(i=>(i.sku||'').toLowerCase().includes(aiSearch)||(i.name||'').toLowerCase().includes(aiSearch));
           html+=`<div class="flex" style="gap:6px;margin-bottom:8px"><input type="search" id="a-inv-search" placeholder="SKU・商品名で検索" style="min-width:160px"><button class="btn primary" style="padding:5px 10px;font-size:12px" onclick="renderAll()">検索</button><span style="font-size:12px;color:var(--muted);margin-left:auto">${aiItems.length}件</span></div>`;
           html+=`<div class="table-wrap"><table style="font-size:11px"><thead><tr><th>SKU</th><th>商品名</th><th>在庫数</th><th>仕入価格</th><th>販売価格</th><th>販路</th></tr></thead><tbody>`;
-          aiItems.slice(0,300).forEach(it=>{html+=`<tr><td style="font-weight:600;color:var(--blue-deep);font-size:10px">${esc(it.sku||'—')}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name||'—')}</td><td>${it.qty||0}</td><td>¥${(it.cost||0).toLocaleString()}</td><td>¥${(it.price||0).toLocaleString()}</td><td style="font-size:10px">${esc(it.pl||'')}</td></tr>`;});
+          aiItems.slice(0,300).forEach(it=>{html+=`<tr><td style="font-weight:600;color:var(--blue-deep);font-size:10px">${esc(it.sku||'—')}</td><td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name||'—')}</td><td>${it.qty||0}</td><td>¥${(it.cost||0).toLocaleString()}</td><td>¥${(it.price||0).toLocaleString()}</td><td style="font-size:10px">${_plBadgesHtml(it.pl)}</td></tr>`;});
           if(aiItems.length>300)html+=`<tr><td colspan="6" style="text-align:center;color:var(--muted)">...他${aiItems.length-300}件</td></tr>`;
           html+=`</tbody></table></div>`;
         } else html+=`<div class="note">保存時の棚卸明細データがありません。月次データを再保存してください。</div>`;
@@ -6539,7 +6552,7 @@ function _savedInvHtml(pv,badgeHtml){
   if(pf!=='all')list=list.filter(i=>(i.pl||'')===pf);
   h+=`<div class="flex" style="gap:8px;margin:10px 0;flex-wrap:wrap"><input type="search" value="${esc(state._pvInvSearch||'')}" placeholder="SKU・商品名で検索" style="min-width:180px" onchange="state._pvInvSearch=this.value;renderAll()"><select onchange="state._pvInvPf=this.value;renderAll()"><option value="all">全販路</option>${pls.map(p=>`<option value="${esc(p)}" ${pf===p?'selected':''}>${esc(p)}</option>`).join('')}</select><span style="font-size:11px;color:var(--muted);align-self:center">${list.length}件 ・ ${list.reduce((s,i)=>s+(i.qty||0),0)}点 ・ 原価 ${_pvY(list.reduce((s,i)=>s+(i.qty||0)*(i.cost||0),0))}</span></div>`;
   h+=`<div class="table-wrap"><table style="font-size:12px"><thead><tr>${_ed?'<th style="width:30px"></th>':''}<th>SKU</th><th>商品名</th><th>在庫数</th><th>仕入価格</th><th>販売価格</th><th>在庫金額</th><th>販路</th></tr></thead><tbody>`;
-  list.forEach(i=>{const _mn=i.manual||null;h+=`<tr${_mn?' style="background:#f3faf4"':''}>${_ed?`<td><button class="btn ghost" title="${_mn?'この手動追加行を解除':'この行を削除'}" style="font-size:11px;padding:2px 6px;color:var(--danger)" onclick="_svInvDel('${d.id}',${i._i})">✕</button></td>`:''}<td style="font-weight:600;color:var(--blue-deep);font-size:11px">${esc(i.sku||'—')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name||'')}</td><td style="text-align:center">${_ed?`<input type="number" value="${i.qty||0}" style="width:55px;font-size:12px;padding:2px 4px" onchange="_svInvEdit('${d.id}',${i._i},'qty',this.value)">`:(i.qty||0)}</td><td>${_ed?`<input type="number" value="${i.cost||0}" style="width:90px;font-size:12px;padding:2px 4px" onchange="_svInvEdit('${d.id}',${i._i},'cost',this.value)">`:_pvY(i.cost)}</td><td>${i.price?_pvY(i.price):'—'}</td><td>${_pvY((i.qty||0)*(i.cost||0))}</td><td style="font-size:11px">${_mn?`<span class="badge" style="background:#e8f5e9;color:#2e7d32">手動追加（${esc(_mn.reason||'')}）</span>${_ed?`<div><select style="font-size:10px;padding:1px 3px;margin-top:2px" onchange="_svInvManualEdit('${d.id}',${i._i},'reason',this.value)">${_MI_REASONS.map(r=>`<option value="${r}"${_mn.reason===r?' selected':''}>${r}</option>`).join('')}</select></div>`:''}${_mn.note?`<div style="font-size:10px;color:var(--muted)">${esc(_mn.note)}</div>`:''}${_mn.noProduct?'<div style="font-size:10px;color:#b25f00">仕入データなし</div>':''}${(()=>{const ex=(state.manualInv||[]).find(x=>x.from&&x.from.mid===_mn.id);return ex?`<div style="font-size:10px;color:var(--ok)">引継ぎ済み → 作業中の棚卸（計上開始 ${esc(ex.ym||'')}）</div>`:(_ed?`<div><button class="btn ghost" style="font-size:10px;padding:1px 6px;margin-top:2px" onclick="_miCarryLater('${d.id}',${i._i})">翌月以降へ引き継ぐ</button></div>`:'');})()}`:esc(i.pl||'')}</td></tr>`;});
+  list.forEach(i=>{const _mn=i.manual||null;h+=`<tr${_mn?' style="background:#f3faf4"':''}>${_ed?`<td><button class="btn ghost" title="${_mn?'この手動追加行を解除':'この行を削除'}" style="font-size:11px;padding:2px 6px;color:var(--danger)" onclick="_svInvDel('${d.id}',${i._i})">✕</button></td>`:''}<td style="font-weight:600;color:var(--blue-deep);font-size:11px">${esc(i.sku||'—')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name||'')}</td><td style="text-align:center">${_ed?`<input type="number" value="${i.qty||0}" style="width:55px;font-size:12px;padding:2px 4px" onchange="_svInvEdit('${d.id}',${i._i},'qty',this.value)">`:(i.qty||0)}</td><td>${_ed?`<input type="number" value="${i.cost||0}" style="width:90px;font-size:12px;padding:2px 4px" onchange="_svInvEdit('${d.id}',${i._i},'cost',this.value)">`:_pvY(i.cost)}</td><td>${i.price?_pvY(i.price):'—'}</td><td>${_pvY((i.qty||0)*(i.cost||0))}</td><td style="font-size:11px">${_mn?`<span class="badge" style="background:#e8f5e9;color:#2e7d32">手動追加（${esc(_mn.reason||'')}）</span>${_ed?`<div><select style="font-size:10px;padding:1px 3px;margin-top:2px" onchange="_svInvManualEdit('${d.id}',${i._i},'reason',this.value)">${_MI_REASONS.map(r=>`<option value="${r}"${_mn.reason===r?' selected':''}>${r}</option>`).join('')}</select></div>`:''}${_mn.note?`<div style="font-size:10px;color:var(--muted)">${esc(_mn.note)}</div>`:''}${_mn.noProduct?'<div style="font-size:10px;color:#b25f00">仕入データなし</div>':''}${(()=>{const ex=(state.manualInv||[]).find(x=>x.from&&x.from.mid===_mn.id);return ex?`<div style="font-size:10px;color:var(--ok)">引継ぎ済み → 作業中の棚卸（計上開始 ${esc(ex.ym||'')}）</div>`:(_ed?`<div><button class="btn ghost" style="font-size:10px;padding:1px 6px;margin-top:2px" onclick="_miCarryLater('${d.id}',${i._i})">翌月以降へ引き継ぐ</button></div>`:'');})()}`:_plBadgesHtml(i.pl)}</td></tr>`;});
   if(!list.length)h+=`<tr><td colspan="${_ed?8:7}" style="text-align:center;color:var(--muted);padding:16px">該当なし</td></tr>`;
   h+=`</tbody></table></div></div>`;
   return h;
@@ -7757,10 +7770,13 @@ function isNormalColor(hex){
 function getVal(row,cm,key){ if(cm[key]===undefined) return undefined; if(cm[key]===-1) return '—'; return (row[cm[key]]||'').trim(); }
 function getNum(row,cm,key){ if(cm[key]===undefined) return 0; if(cm[key]===-1) return 0; return parseInt((row[cm[key]]||'0').replace(/[,¥￥$\s]/g,''),10)||0; }
 
+// 数式の結果が空・0・エラー表示（#N/A・#REF! など）のセルは「未入力」として扱う（SKU列に =C&K&L のような数式があると、未入力行でも文字列が返るため）
+function _shBlank(v){const s=String(v===undefined||v===null?'':v).trim();if(s===''||s==='0'||s==='－'||s==='-')return true;return /^#(N\/A|REF!|VALUE!|DIV\/0!|NAME\?|NUM!|NULL!|ERROR!)$/i.test(s);}
+window._shBlank=_shBlank;
 function processRows(rows,cm,colors,sheetName){
   const withSKU=[],withoutSKU=[];
-  rows.forEach((row,idx)=>{const sku=cm.sku>=0?(row[cm.sku]||'').trim():'';const e={_source:sheetName||''};
-    const name=getVal(row,cm,'name'); if(name!==undefined&&name!=='') e.name=name;
+  rows.forEach((row,idx)=>{let sku=cm.sku>=0?(row[cm.sku]||'').trim():'';if(_shBlank(sku)&&sku!=='-'&&sku!=='－')sku='';const e={_source:sheetName||''};
+    const name=getVal(row,cm,'name'); if(name!==undefined&&name!==''&&!_shBlank(name)) e.name=name;
     const price=getNum(row,cm,'price'); if(price) e.price=price;
     const cost=getNum(row,cm,'cost'); if(cost) e.cost=cost;
     const date=getVal(row,cm,'date'); if(date!==undefined&&date!==''&&date!=='—') e.date=date;
@@ -7861,7 +7877,8 @@ async function doSync(fromCache){
       if(sh.colMap.sku===undefined)continue;
 
       // Diagnostic: what colMap resolves to for first data row
-      const d={name:sh.name,colMap:{},sample:{},rowCount:data.rows.length,colorCount:(data.colors||[]).length};
+      const d={name:sh.name,colMap:{},sample:{},rowCount:data.rows.length,colorCount:(data.colors||[]).length,colorCol:(sh.colMap&&sh.colMap.no!==undefined&&sh.colMap.no>=0)?(data.headers[sh.colMap.no]||('列'+(sh.colMap.no+1))):'',maxRows:sh.maxRows||0,total:data.total||0};
+      try{const cc={};(data.colors||[]).forEach(c=>{const k=c?classifyColorKey(c):'none';cc[k]=(cc[k]||0)+1;});d.colorKeys=cc;}catch(e){}
       Object.entries(sh.colMap).forEach(([k,idx])=>{
         d.colMap[k]=`${idx}:${data.headers[idx]||'?'}`;
         if(data.rows[0]&&idx<data.rows[0].length) d.sample[k]=data.rows[0][idx];
@@ -7874,8 +7891,10 @@ async function doSync(fromCache){
         let sku=cm.sku>=0?(row[cm.sku]||'').trim():'';
         const _dashSku=(sku==='-'||sku==='－');
         if(_dashSku)sku='';
+        if(_shBlank(sku))sku=''; // 数式の結果が空・0・エラーのSKUは未入力扱い
         const e={_source:sh.name||''};
         if(cm.name!==undefined) e.name=(row[cm.name]||'').trim();
+        if(e.name!==undefined&&_shBlank(e.name)){if(e.name!=='')d._fxBlank=(d._fxBlank||0)+1;e.name='';} // 商品名が数式のエラー・0なら未入力扱い（行ごと読み飛ばす）
         if(cm.price!==undefined){const v=parseInt((row[cm.price]||'0').replace(/[,¥￥$\s]/g,''),10);if(v)e.price=v;}
         if(cm.cost!==undefined){const v=parseInt((row[cm.cost]||'0').replace(/[,¥￥$\s]/g,''),10);if(v)e.cost=v;}
         if(cm.date!==undefined) e.date=_normPurchDate((row[cm.date]||'').trim(), sh.name);
